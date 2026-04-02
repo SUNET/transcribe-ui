@@ -21,9 +21,10 @@ import httpx
 import re
 
 from collections import defaultdict
-from datetime import datetime
-from nicegui import ui
-from utils.common import add_timezone_to_timestamp, default_styles, page_init
+from datetime import datetime, timezone
+from nicegui import app, ui
+from utils.common import add_timezone_to_timestamp, page_init
+from utils.styles import default_styles, severity_styles
 from db.analytics import (
     get_page_views,
     get_page_views_summary,
@@ -196,15 +197,6 @@ def edit_group(group_id: str) -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-        </style>
-        """
-    )
 
     try:
         res = httpx.get(
@@ -326,57 +318,6 @@ def statistics(group_id: str) -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-            .stats-container {
-                max-width: 1500px;
-                margin: 0 auto;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                gap: 2rem;
-                padding: 2rem 1rem;
-            }
-            .stats-card {
-                width: 100%;
-                background-color: #ffffff;
-                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-                border-radius: 1rem;
-                padding: 1.5rem 2rem;
-                text-align: center;
-            }
-            .stats-card h1 {
-                font-size: 1.8rem;
-                font-weight: 700;
-                margin-bottom: 1rem;
-                color: #111827;
-            }
-            .stats-card p {
-                margin: 0.25rem 0;
-                font-size: 1.1rem;
-                color: #374151;
-            }
-            .chart-container {
-                width: 100%;
-                background-color: #ffffff;
-                border-radius: 1rem;
-                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-                padding: 1.5rem 2rem;
-            }
-            .table-container {
-                width: 100%;
-                background-color: #ffffff;
-                border-radius: 1rem;
-                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-                padding: 1.5rem 2rem;
-            }
-        </style>
-        """
-    )
 
     stats = user_statistics_get(group_id=group_id)
 
@@ -402,19 +343,19 @@ def statistics(group_id: str) -> None:
 
     with ui.element("div").classes("stats-container w-full"):
         with ui.element("div").classes("stats-card w-full"):
-            ui.label(f"Number of users: {total_users}").classes("text-lg text-gray-600")
+            ui.label(f"Number of users: {total_users}").classes("text-lg text-theme-secondary")
             ui.label(
                 f"Transcribed files this month: {result.get('transcribed_files', 0)} files"
-            ).classes("text-lg text-gray-600")
+            ).classes("text-lg text-theme-secondary")
             ui.label(
                 f"Transcribed files last month: {result.get('transcribed_files_last_month', 0)} files"
-            ).classes("text-lg text-gray-600")
+            ).classes("text-lg text-theme-secondary")
             ui.label(
                 f"Transcribed minutes this month: {result.get('total_transcribed_minutes', 0):.0f} minutes"
-            ).classes("text-lg text-gray-600")
+            ).classes("text-lg text-theme-secondary")
             ui.label(
                 f"Transcribed minutes last month: {result.get('total_transcribed_minutes_last_month', 0):.0f} minutes"
-            ).classes("text-lg text-gray-600")
+            ).classes("text-lg text-theme-secondary")
 
         if per_day:
             dates = list(per_day.keys())
@@ -434,7 +375,7 @@ def statistics(group_id: str) -> None:
                 title="Transcribed minutes per day (current month)",
                 xaxis_title="Date",
                 yaxis_title="Minutes",
-                template="plotly_white",
+                template="plotly_dark" if app.storage.user.get("dark_mode", None) else "plotly_white",
                 margin=dict(l=40, r=20, t=60, b=40),
                 height=400,
             )
@@ -460,7 +401,7 @@ def statistics(group_id: str) -> None:
                 title="Transcribed minutes per day (previous month)",
                 xaxis_title="Date",
                 yaxis_title="Minutes",
-                template="plotly_white",
+                template="plotly_dark" if app.storage.user.get("dark_mode", None) else "plotly_white",
                 margin=dict(l=40, r=20, t=60, b=40),
                 height=400,
             )
@@ -471,7 +412,7 @@ def statistics(group_id: str) -> None:
         if per_user:
             with ui.element("div").classes("table-container"):
                 ui.label("Transcribed minutes per user this month").classes(
-                    "text-gray-800"
+                    "text-theme-primary"
                 )
                 user_rows = [
                     {"username": username, "minutes": f"{minutes:.1f}"}
@@ -513,7 +454,7 @@ def statistics(group_id: str) -> None:
         if job_queue:
             with ui.element("div").classes("table-container"):
                 ui.label("Job queue for group").classes(
-                    "text-2xl font-bold mb-4 text-gray-800"
+                    "text-2xl font-bold mb-4 text-theme-primary"
                 )
                 queue_columns = [
                     {
@@ -575,15 +516,6 @@ def create() -> None:
             return
 
         ui.add_head_html(default_styles)
-        ui.add_head_html(
-            """
-            <style>
-                body {
-                    background-color: #ffffff;
-                }
-            </style>
-            """
-        )
 
         with ui.row().style(
             "justify-content: space-between; align-items: center; width: 100%;"
@@ -662,7 +594,7 @@ def create() -> None:
                                     value=False,
                                 )
                                 .classes("text-bold")
-                                .style("width: 100%; background-color: #ffffff;")
+                                .style("width: 100%; background-color: var(--color-bg-surface);")
                             )
 
                         if group["name"] == "All users":
@@ -686,15 +618,6 @@ def users() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-        </style>
-        """
-    )
 
     try:
         res = httpx.get(
@@ -865,44 +788,6 @@ def health() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-            .card {
-                background-color: white;
-                border-radius: 1rem;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-                padding: 1.25rem;
-                width: 100%;
-                max-width: 100%;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-            }
-            .status-dot {
-                width: 12px;
-                height: 12px;
-                border-radius: 50%;
-                display: inline-block;
-                margin-right: 6px;
-            }
-            .health-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
-                gap: 1.25rem;
-                width: 100%;
-            }
-            @media (max-width: 768px) {
-                .health-grid {
-                    grid-template-columns: 1fr;
-                }
-            }
-        </style>
-        """
-    )
 
     ui.label("System status").classes("text-3xl font-bold mb-4")
 
@@ -927,7 +812,7 @@ def health() -> None:
 
         with ui.element("div").classes("health-grid"):
             if not data:
-                ui.label("No workers online.").classes("text-lg text-gray-600")
+                ui.label("No workers online.").classes("text-lg text-theme-secondary")
                 return
 
             for host, samples in data.items():
@@ -961,7 +846,7 @@ def health() -> None:
                     for s in samples
                 ]
 
-                with ui.card().classes("card"):
+                with ui.card().classes("health-card"):
                     with ui.row().classes("items-center justify-between w-full"):
                         ui.label(host).classes("text-lg font-medium")
 
@@ -983,7 +868,7 @@ def health() -> None:
 
                     ui.label(
                         f"Load Avg: {latest['load_avg']:.1f} | Memory Usage: {latest['memory_usage']:.1f}%"
-                    ).classes("text-sm text-gray-600 mb-2")
+                    ).classes("text-sm text-theme-secondary mb-2")
 
                     fig_cpu = go.Figure()
                     fig_cpu.add_trace(
@@ -1021,7 +906,7 @@ def health() -> None:
                             font=dict(size=11),
                         ),
                         height=200,
-                        template="plotly_white",
+                        template="plotly_dark" if app.storage.user.get("dark_mode", None) else "plotly_white",
                         xaxis=dict(
                             title="Time",
                             showgrid=True,
@@ -1077,7 +962,7 @@ def health() -> None:
                                 font=dict(size=11),
                             ),
                             height=200,
-                            template="plotly_white",
+                            template="plotly_dark" if app.storage.user.get("dark_mode", None) else "plotly_white",
                             xaxis=dict(
                                 title="Time",
                                 showgrid=True,
@@ -1096,7 +981,7 @@ def health() -> None:
                         ui.plotly(fig_gpu).classes("w-full")
 
                     ui.label(f"Last updated: {times[-1]} UTC").classes(
-                        "text-xs text-gray-400 mt-1"
+                        "text-xs text-theme-muted mt-1"
                     )
 
     render_health()
@@ -1253,15 +1138,6 @@ def edit_customer(customer_id: str) -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-        </style>
-        """
-    )
 
     try:
         res = httpx.get(
@@ -1412,15 +1288,6 @@ def customers() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-        </style>
-        """
-    )
 
     with ui.row().style(
         "justify-content: space-between; align-items: center; width: 100%;"
@@ -1978,10 +1845,10 @@ def test_rules_dialog(selected_rules: list[dict]) -> None:
 
     with ui.dialog() as dialog, ui.card().style("min-width: 600px; max-width: 800px;"):
         ui.label("Test rule").classes("text-xl font-bold")
-        ui.label(f"{rule.get('name', '')}").classes("text-grey-7")
+        ui.label(f"{rule.get('name', '')}").classes("text-theme-muted")
         ui.label(
             f"{attr_name} {cond_label} \"{expected}\""
-        ).classes("text-grey-7 text-sm")
+        ).classes("text-theme-muted text-sm")
 
         ui.separator()
 
@@ -2037,7 +1904,7 @@ def test_all_rules_dialog() -> None:
         ui.label("Simulate provisioning").classes("text-xl font-bold")
         ui.label(
             "Enter attribute values to simulate what would happen when a user logs in."
-        ).classes("text-grey-7")
+        ).classes("text-theme-muted")
 
         ui.separator()
 
@@ -2135,11 +2002,11 @@ def test_all_rules_dialog() -> None:
                         ui.label(
                             f'{rule.get("attribute_name")} {cond_label} '
                             f'"{rule.get("attribute_value")}"'
-                        ).classes("text-grey-7 text-sm")
+                        ).classes("text-theme-muted text-sm")
                     if actions:
                         ui.label(
                             f"Actions: {', '.join(actions)}"
-                        ).classes("text-body2 text-grey-8 ml-8")
+                        ).classes("text-body2 text-theme-secondary ml-8")
 
                 for rule in unmatched_rules:
                     cond_label = CONDITION_OPTIONS.get(
@@ -2152,16 +2019,16 @@ def test_all_rules_dialog() -> None:
                         ui.label(
                             f'{rule.get("attribute_name")} {cond_label} '
                             f'"{rule.get("attribute_value")}"'
-                        ).classes("text-grey-7 text-sm")
+                        ).classes("text-theme-muted text-sm")
 
                 if not matched_rules and not unmatched_rules:
-                    ui.label("No enabled rules to test.").classes("text-grey-7")
+                    ui.label("No enabled rules to test.").classes("text-theme-muted")
 
                 # Final provisioning result summary
                 ui.separator().classes("my-2")
                 ui.label("Simulated result").classes("font-bold")
                 if not matched_rules:
-                    ui.label("None").classes("text-grey-7")
+                    ui.label("None").classes("text-theme-muted")
                 else:
                     will_activate = any(r.get("activate") for r in matched_rules)
                     will_deny = any(r.get("deny") for r in matched_rules)
@@ -2188,7 +2055,7 @@ def test_all_rules_dialog() -> None:
                         for r in results:
                             ui.label(r)
                     else:
-                        ui.label("None").classes("text-grey-7")
+                        ui.label("None").classes("text-theme-muted")
 
         with ui.row().classes("w-full justify-end mt-4 gap-2"):
             ui.button("Simulate", icon="science", on_click=run_test).props(
@@ -2226,7 +2093,7 @@ def _show_rules_help() -> None:
                     "equals, contains or starts with), and a value to compare against. "
                     "If the condition matches the user's attribute value, the rule's "
                     "actions are applied."
-                ).classes("text-body2 text-grey-8")
+                ).classes("text-body2 text-theme-secondary")
 
             with ui.column().classes("gap-1"):
                 ui.label("Available actions").classes("text-lg font-semibold")
@@ -2243,7 +2110,7 @@ def _show_rules_help() -> None:
                             ui.label(f"• {action}").classes(
                                 "text-body2 font-medium"
                             ).style("min-width: 140px;")
-                            ui.label(f"— {desc}").classes("text-body2 text-grey-8")
+                            ui.label(f"— {desc}").classes("text-body2 text-theme-secondary")
 
             with ui.column().classes("gap-1"):
                 ui.label("Scoping").classes("text-lg font-semibold")
@@ -2251,21 +2118,21 @@ def _show_rules_help() -> None:
                     "The Realm field limits which login domains the rule applies to. "
                     "Local administrators can only create rules for the realms "
                     "assigned to their account."
-                ).classes("text-body2 text-grey-8")
+                ).classes("text-body2 text-theme-secondary")
 
             with ui.column().classes("gap-1"):
                 ui.label("Rule evaluation").classes("text-lg font-semibold")
                 ui.label(
                     "All enabled rules are evaluated on every login. "
                     "If rules conflict:"
-                ).classes("text-body2 text-grey-8")
+                ).classes("text-body2 text-theme-secondary")
                 with ui.column().classes("gap-0 pl-2"):
                     for line in [
                         "Deactivate always wins over Activate.",
                         "For group assignment, the last matching rule wins. "
                         "A user can only belong to one group.",
                     ]:
-                        ui.label(f"• {line}").classes("text-body2 text-grey-8")
+                        ui.label(f"• {line}").classes("text-body2 text-theme-secondary")
 
             with ui.column().classes("gap-1"):
                 ui.label("Manual override").classes("text-lg font-semibold")
@@ -2275,7 +2142,7 @@ def _show_rules_help() -> None:
                     "override that decision. "
                     "The user will remain deactivated until an administrator "
                     "reactivates the account."
-                ).classes("text-body2 text-grey-8")
+                ).classes("text-body2 text-theme-secondary")
 
             with ui.column().classes("gap-1"):
                 ui.label("Testing").classes("text-lg font-semibold")
@@ -2285,7 +2152,7 @@ def _show_rules_help() -> None:
                     "rule's attribute and condition. "
                     "For list-type attributes (for example affiliations), enter "
                     "multiple values separated by commas."
-                ).classes("text-body2 text-grey-8")
+                ).classes("text-body2 text-theme-secondary")
 
         with ui.row().classes("w-full justify-end mt-4"):
             ui.button("Close", on_click=dialog.close).props("flat")
@@ -2306,15 +2173,6 @@ def rules_page() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-        </style>
-        """
-    )
 
     with ui.row().style(
         "justify-content: space-between; align-items: center; width: 100%;"
@@ -2340,7 +2198,7 @@ def rules_page() -> None:
         "Rules are evaluated on every login. "
         "Deactivate overrides Activate. "
         "The last matching rule determines the user's group."
-    ).classes("text-body2 text-black")
+    ).classes("text-body2")
 
     rules_data = rules_get()
     rules_list = rules_data.get("result", []) if rules_data else []
@@ -2521,7 +2379,7 @@ def rules_page() -> None:
 
         ui.label(
             "These are the known attribute names available when creating rules."
-        ).classes("text-body2 text-grey-7 mb-2")
+        ).classes("text-body2 text-theme-muted mb-2")
 
         attrs = attributes_get()
         if not attrs:
@@ -2600,35 +2458,10 @@ SEVERITY_OPTIONS = {
     "major_incident": "Major incident",
 }
 
-SEVERITY_STYLES = {
-    "info": {
-        "bg": "#e3f2fd",
-        "border": "#90caf9",
-        "icon": "campaign",
-        "icon_color": "#1565c0",
-        "dismissible": True,
-    },
-    "maintenance": {
-        "bg": "#fff3e0",
-        "border": "#ffb74d",
-        "icon": "construction",
-        "icon_color": "#e65100",
-        "dismissible": True,
-    },
-    "major_incident": {
-        "bg": "#fce4ec",
-        "border": "#ef9a9a",
-        "icon": "crisis_alert",
-        "icon_color": "#c62828",
-        "dismissible": False,
-    },
-}
-
-
 def _announcement_preview_dialog(message: str, severity: str = "info") -> None:
     """Show a preview of how the announcement banner will look."""
 
-    style = SEVERITY_STYLES.get(severity, SEVERITY_STYLES["info"])
+    style = severity_styles.get(severity, severity_styles["info"])
 
     with ui.dialog() as preview_dialog:
         with ui.card().style("width: 700px; max-width: 90vw; padding: 24px;"):
@@ -2641,7 +2474,7 @@ def _announcement_preview_dialog(message: str, severity: str = "info") -> None:
                 ui.icon(style["icon"], size="sm").style(
                     f"color: {style['icon_color']};"
                 )
-                ui.html(message, sanitize=False).style("color: #000000; font-size: 0.95rem;")
+                ui.html(message, sanitize=False).style("color: var(--color-text-primary); font-size: 0.95rem;")
                 if style["dismissible"]:
                     ui.button(icon="close").props(
                         "flat round dense size=sm color=grey-7 disable"
@@ -2663,7 +2496,7 @@ def _announcement_create_dialog() -> None:
             ui.label(
                 "The message supports HTML links, e.g. "
                 '<a href="https://example.com">click here</a>'
-            ).classes("text-body2 text-grey-7 mb-2")
+            ).classes("text-body2 text-theme-muted mb-2")
 
             message_input = ui.textarea("Message").classes("w-full").props("outlined")
 
@@ -2704,7 +2537,7 @@ def _announcement_create_dialog() -> None:
 
             ui.label(
                 "Leave dates empty for no time restriction. All times are in server time."
-            ).classes("text-body2 text-grey-7")
+            ).classes("text-body2 text-theme-muted")
 
             enabled_switch = ui.switch("Enabled", value=True)
 
@@ -2754,7 +2587,7 @@ def _announcement_edit_dialog(ann: dict) -> None:
             ui.label(
                 "The message supports HTML links, e.g. "
                 '<a href="https://example.com">click here</a>'
-            ).classes("text-body2 text-grey-7 mb-2")
+            ).classes("text-body2 text-theme-muted mb-2")
 
             message_input = ui.textarea("Message", value=ann.get("message", "")).classes(
                 "w-full"
@@ -2796,7 +2629,7 @@ def _announcement_edit_dialog(ann: dict) -> None:
 
             ui.label(
                 "Leave dates empty for no time restriction. All times are in server time."
-            ).classes("text-body2 text-grey-7")
+            ).classes("text-body2 text-theme-muted")
 
             enabled_switch = ui.switch("Enabled", value=ann.get("enabled", True))
 
@@ -2875,7 +2708,7 @@ def announcements_page() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html("<style>body { background-color: #ffffff; }</style>")
+
 
     with ui.row().style(
         "justify-content: space-between; align-items: center; width: 100%;"
@@ -2888,7 +2721,7 @@ def announcements_page() -> None:
     ui.label(
         "Manage announcement banners shown to all users. "
         "All times are in server time."
-    ).classes("text-body2 text-black mb-4")
+    ).classes("text-body2 mb-4")
 
     ann_list = announcements_get()
 
@@ -3024,9 +2857,37 @@ def analytics() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html("<style>body { background-color: #ffffff; }</style>")
+
 
     ui.label("Activity overview").classes("text-3xl font-bold mb-4")
+
+    # Plotly template based on dark mode
+    is_dark = app.storage.user.get("dark_mode", None)
+    plotly_template = "plotly_dark" if is_dark else "plotly_white"
+
+    # Calculate UTC offset for the user's timezone
+    import pytz
+
+    user_tz_name = app.storage.user.get("timezone", "UTC")
+    try:
+        user_tz = pytz.timezone(user_tz_name)
+        utc_offset_hours = int(
+            datetime.now(user_tz).utcoffset().total_seconds() // 3600
+        )
+    except Exception:
+        utc_offset_hours = 0
+
+    def shift_hour(h: int) -> int:
+        return (h + utc_offset_hours) % 24
+
+    def shift_dow(dow: int, h: int) -> int:
+        """Shift day-of-week if hour wraps past midnight."""
+        shifted = h + utc_offset_hours
+        if shifted >= 24:
+            return (dow % 7) + 1  # next day (PostgreSQL dow: 0=Sun..6=Sat)
+        elif shifted < 0:
+            return (dow - 2) % 7  # previous day
+        return dow
 
     stats = get_total_stats()
     wow = get_week_over_week()
@@ -3067,7 +2928,7 @@ def analytics() -> None:
     # Peak hours heatmap + hourly distribution
     with ui.row().classes("w-full gap-4 q-mt-lg"):
         with ui.card().classes("flex-1 p-4").style("min-width: 400px;"):
-            ui.label("Peak hours (last 30 days)").classes(
+            ui.label(f"Peak hours (last 30 days, {user_tz_name})").classes(
                 "text-h6 font-semibold q-mb-md"
             )
             heatmap_data = get_hourly_heatmap(days=30)
@@ -3078,9 +2939,10 @@ def analytics() -> None:
                 # Build a 7x24 matrix (rows=days, cols=hours)
                 matrix = [[0] * 24 for _ in range(7)]
                 for r in heatmap_data:
+                    adj_dow = shift_dow(r["dow"], r["hour"])
                     # PostgreSQL dow: 0=Sun, 1=Mon..6=Sat -> remap to Mon=0..Sun=6
-                    day_idx = (r["dow"] - 1) % 7
-                    matrix[day_idx][r["hour"]] = r["views"]
+                    day_idx = (adj_dow - 1) % 7
+                    matrix[day_idx][shift_hour(r["hour"])] += r["views"]
 
                 fig = go.Figure(
                     data=go.Heatmap(
@@ -3088,8 +2950,8 @@ def analytics() -> None:
                         x=[f"{h:02d}:00" for h in hours],
                         y=day_names,
                         colorscale=[
-                            [0, "#f5f5f5"],
-                            [0.25, "#bbdefb"],
+                            [0, "#1e1e1e" if is_dark else "#f5f5f5"],
+                            [0.25, "#1a3a5c" if is_dark else "#bbdefb"],
                             [0.5, "#42a5f5"],
                             [0.75, "#1565c0"],
                             [1, "#0d47a1"],
@@ -3104,7 +2966,7 @@ def analytics() -> None:
                     )
                 )
                 fig.update_layout(
-                    template="plotly_white",
+                    template="plotly_dark" if app.storage.user.get("dark_mode", None) else "plotly_white",
                     height=350,
                     margin=dict(l=50, r=20, t=20, b=40),
                     xaxis_title="Hour of Day",
@@ -3115,14 +2977,17 @@ def analytics() -> None:
                 ui.label("No data yet.").classes("text-grey-6")
 
         with ui.card().classes("flex-1 p-4").style("min-width: 400px;"):
-            ui.label("Hourly distribution (last 30 days)").classes(
+            ui.label(f"Hourly distribution (last 30 days, {user_tz_name})").classes(
                 "text-h6 font-semibold q-mb-md"
             )
             hourly = get_hourly_distribution(days=30)
 
             if hourly:
-                # Fill missing hours with 0
-                hourly_map = {r["hour"]: r["views"] for r in hourly}
+                # Shift UTC hours to user timezone and fill missing with 0
+                hourly_map = {}
+                for r in hourly:
+                    shifted = shift_hour(r["hour"])
+                    hourly_map[shifted] = hourly_map.get(shifted, 0) + r["views"]
                 all_hours = list(range(24))
                 all_views = [hourly_map.get(h, 0) for h in all_hours]
 
@@ -3137,7 +3002,7 @@ def analytics() -> None:
                 fig.update_layout(
                     xaxis_title="Hour of Day",
                     yaxis_title="Views",
-                    template="plotly_white",
+                    template="plotly_dark" if app.storage.user.get("dark_mode", None) else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3173,7 +3038,7 @@ def analytics() -> None:
                 fig.update_layout(
                     xaxis_title="Date",
                     yaxis_title="Views",
-                    template="plotly_white",
+                    template="plotly_dark" if app.storage.user.get("dark_mode", None) else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3206,7 +3071,7 @@ def analytics() -> None:
                     barmode="group",
                     xaxis_title="Page",
                     yaxis_title="Views",
-                    template="plotly_white",
+                    template="plotly_dark" if app.storage.user.get("dark_mode", None) else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3234,7 +3099,7 @@ def analytics() -> None:
                 fig.update_layout(
                     xaxis_title="Date",
                     yaxis_title="Page Views",
-                    template="plotly_white",
+                    template="plotly_dark" if app.storage.user.get("dark_mode", None) else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3296,7 +3161,7 @@ def analytics() -> None:
                     barmode="stack",
                     xaxis_title="Date",
                     yaxis_title="Count",
-                    template="plotly_white",
+                    template="plotly_dark" if app.storage.user.get("dark_mode", None) else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3332,7 +3197,7 @@ def analytics() -> None:
                     barmode="group",
                     xaxis_title="Action",
                     yaxis_title="Count",
-                    template="plotly_white",
+                    template="plotly_dark" if app.storage.user.get("dark_mode", None) else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
