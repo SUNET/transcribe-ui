@@ -307,7 +307,7 @@ def edit_group(group_id: str) -> None:
 
 @ui.refreshable
 @ui.page("/admin/stats/{group_id}")
-def statistics(group_id: str) -> None:
+async def statistics(group_id: str) -> None:
     """
     Page to show statistics of a group with improved layout and design.
     """
@@ -318,6 +318,19 @@ def statistics(group_id: str) -> None:
         return
 
     ui.add_head_html(default_styles)
+
+    # Detect resolved dark mode (handles auto mode with OS preference)
+    dark_pref = app.storage.user.get("dark_mode", None)
+    if dark_pref is None:
+        try:
+            await ui.context.client.connected()
+            prefers_dark = await ui.run_javascript(
+                "window.matchMedia('(prefers-color-scheme: dark)').matches",
+                timeout=5.0,
+            )
+            app.storage.user["_resolved_dark"] = bool(prefers_dark)
+        except (TimeoutError, Exception):
+            pass
 
     stats = user_statistics_get(group_id=group_id)
 
@@ -378,7 +391,7 @@ def statistics(group_id: str) -> None:
                 xaxis_title="Date",
                 yaxis_title="Minutes",
                 template="plotly_dark"
-                if app.storage.user.get("dark_mode", None)
+                if app.storage.user.get("_resolved_dark")
                 else "plotly_white",
                 margin=dict(l=40, r=20, t=60, b=40),
                 height=400,
@@ -406,7 +419,7 @@ def statistics(group_id: str) -> None:
                 xaxis_title="Date",
                 yaxis_title="Minutes",
                 template="plotly_dark"
-                if app.storage.user.get("dark_mode", None)
+                if app.storage.user.get("_resolved_dark")
                 else "plotly_white",
                 margin=dict(l=40, r=20, t=60, b=40),
                 height=400,
@@ -792,7 +805,7 @@ def users() -> None:
 
 
 @ui.page("/health")
-def health() -> None:
+async def health() -> None:
     """
     Health check dashboard displaying backend system metrics.
     """
@@ -804,6 +817,19 @@ def health() -> None:
         return
 
     ui.add_head_html(default_styles)
+
+    # Detect resolved dark mode (handles auto mode with OS preference)
+    dark_pref = app.storage.user.get("dark_mode", None)
+    if dark_pref is None:
+        try:
+            await ui.context.client.connected()
+            prefers_dark = await ui.run_javascript(
+                "window.matchMedia('(prefers-color-scheme: dark)').matches",
+                timeout=5.0,
+            )
+            app.storage.user["_resolved_dark"] = bool(prefers_dark)
+        except (TimeoutError, Exception):
+            pass
 
     ui.label("System status").classes("text-3xl font-bold mb-4")
 
@@ -923,21 +949,18 @@ def health() -> None:
                         ),
                         height=200,
                         template="plotly_dark"
-                        if app.storage.user.get("dark_mode", None)
+                        if app.storage.user.get("_resolved_dark")
                         else "plotly_white",
                         xaxis=dict(
                             title="Time",
                             showgrid=True,
-                            gridcolor="rgba(0,0,0,0.05)",
                         ),
                         yaxis=dict(
                             title="%",
                             showgrid=True,
-                            gridcolor="rgba(0,0,0,0.05)",
                             rangemode="tozero",
                         ),
                         font=dict(size=11),
-                        plot_bgcolor="rgba(248, 250, 252, 0.5)",
                         hovermode="x unified",
                     )
                     ui.plotly(fig_cpu).classes("w-full")
@@ -981,7 +1004,7 @@ def health() -> None:
                             ),
                             height=200,
                             template="plotly_dark"
-                            if app.storage.user.get("dark_mode", None)
+                            if app.storage.user.get("_resolved_dark")
                             else "plotly_white",
                             xaxis=dict(
                                 title="Time",
@@ -1481,6 +1504,11 @@ def create_rule_dialog(page: callable) -> None:
                 .props("outlined")
             )
 
+            ui.label("Notifications").classes("text-lg font-semibold mt-2")
+            with ui.row().classes("w-full gap-4"):
+                notify_job_cb = ui.checkbox("Notify when transcription completed")
+                notify_deletion_cb = ui.checkbox("Notify for upcoming file deletions")
+
             with ui.row().style("justify-content: flex-end; width: 100%;"):
                 ui.button("Cancel").classes("button-close").props(
                     "color=black flat"
@@ -1499,6 +1527,8 @@ def create_rule_dialog(page: callable) -> None:
                             activate=activate_cb.value,
                             deny=deny_cb.value,
                             assign_to_group=group_select.value,
+                            notify_job=notify_job_cb.value,
+                            notify_deletion=notify_deletion_cb.value,
                         )
                         and (dialog.close(), ui.navigate.to("/admin/rules"))
                     ),
@@ -1534,6 +1564,8 @@ def _do_create_rule(**kwargs) -> bool:
         "assign_to_group": str(kwargs["assign_to_group"])
         if kwargs["assign_to_group"]
         else None,
+        "notify_job": kwargs.get("notify_job", False),
+        "notify_deletion": kwargs.get("notify_deletion", False),
     }
 
     result = rule_create(data)
@@ -1676,6 +1708,17 @@ def edit_rule_dialog(rule: dict, page: callable) -> None:
                 .props("outlined")
             )
 
+            ui.label("Notifications").classes("text-lg font-semibold mt-2")
+            with ui.row().classes("w-full gap-4"):
+                notify_job_cb = ui.checkbox(
+                    "Notify when transcription completed",
+                    value=rule.get("notify_job", False),
+                )
+                notify_deletion_cb = ui.checkbox(
+                    "Notify for upcoming file deletions",
+                    value=rule.get("notify_deletion", False),
+                )
+
             with ui.row().style("justify-content: flex-end; width: 100%;"):
                 ui.button("Cancel").classes("button-close").props(
                     "color=black flat"
@@ -1693,6 +1736,8 @@ def edit_rule_dialog(rule: dict, page: callable) -> None:
                             activate=activate_cb.value,
                             deny=deny_cb.value,
                             assign_to_group=group_select.value,
+                            notify_job=notify_job_cb.value,
+                            notify_deletion=notify_deletion_cb.value,
                         )
                         and (dialog.close(), ui.navigate.to("/admin/rules"))
                     ),
@@ -1728,6 +1773,8 @@ def _do_update_rule(**kwargs) -> bool:
         "assign_to_group": str(kwargs["assign_to_group"])
         if kwargs["assign_to_group"]
         else None,
+        "notify_job": kwargs.get("notify_job", False),
+        "notify_deletion": kwargs.get("notify_deletion", False),
     }
 
     if rule_update(kwargs["rule_id"], data):
@@ -2917,7 +2964,7 @@ def announcements_page() -> None:
 
 
 @ui.page("/admin/analytics")
-def analytics() -> None:
+async def analytics() -> None:
     """
     Page view analytics dashboard. BOFH only.
     """
@@ -2930,10 +2977,24 @@ def analytics() -> None:
 
     ui.add_head_html(default_styles)
 
+    # Detect resolved dark mode (handles auto mode with OS preference)
+    dark_pref = app.storage.user.get("dark_mode", None)
+    if dark_pref is None:
+        try:
+            await ui.context.client.connected()
+            prefers_dark = await ui.run_javascript(
+                "window.matchMedia('(prefers-color-scheme: dark)').matches",
+                timeout=5.0,
+            )
+            is_dark = bool(prefers_dark)
+            app.storage.user["_resolved_dark"] = is_dark
+        except (TimeoutError, Exception):
+            is_dark = app.storage.user.get("_resolved_dark", False)
+    else:
+        is_dark = bool(dark_pref)
+
     ui.label("Activity overview").classes("text-3xl font-bold mb-4")
 
-    # Plotly template based on dark mode
-    is_dark = app.storage.user.get("dark_mode", None)
     plotly_template = "plotly_dark" if is_dark else "plotly_white"
 
     # Calculate UTC offset for the user's timezone
@@ -3038,7 +3099,7 @@ def analytics() -> None:
                 )
                 fig.update_layout(
                     template="plotly_dark"
-                    if app.storage.user.get("dark_mode", None)
+                    if app.storage.user.get("_resolved_dark")
                     else "plotly_white",
                     height=350,
                     margin=dict(l=50, r=20, t=20, b=40),
@@ -3076,7 +3137,7 @@ def analytics() -> None:
                     xaxis_title="Hour of Day",
                     yaxis_title="Views",
                     template="plotly_dark"
-                    if app.storage.user.get("dark_mode", None)
+                    if app.storage.user.get("_resolved_dark")
                     else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
@@ -3114,7 +3175,7 @@ def analytics() -> None:
                     xaxis_title="Date",
                     yaxis_title="Views",
                     template="plotly_dark"
-                    if app.storage.user.get("dark_mode", None)
+                    if app.storage.user.get("_resolved_dark")
                     else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
@@ -3149,7 +3210,7 @@ def analytics() -> None:
                     xaxis_title="Page",
                     yaxis_title="Views",
                     template="plotly_dark"
-                    if app.storage.user.get("dark_mode", None)
+                    if app.storage.user.get("_resolved_dark")
                     else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
@@ -3179,7 +3240,7 @@ def analytics() -> None:
                     xaxis_title="Date",
                     yaxis_title="Page Views",
                     template="plotly_dark"
-                    if app.storage.user.get("dark_mode", None)
+                    if app.storage.user.get("_resolved_dark")
                     else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
@@ -3243,7 +3304,7 @@ def analytics() -> None:
                     xaxis_title="Date",
                     yaxis_title="Count",
                     template="plotly_dark"
-                    if app.storage.user.get("dark_mode", None)
+                    if app.storage.user.get("_resolved_dark")
                     else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
@@ -3281,7 +3342,7 @@ def analytics() -> None:
                     xaxis_title="Action",
                     yaxis_title="Count",
                     template="plotly_dark"
-                    if app.storage.user.get("dark_mode", None)
+                    if app.storage.user.get("_resolved_dark")
                     else "plotly_white",
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
