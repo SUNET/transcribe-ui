@@ -24,7 +24,7 @@ from collections import defaultdict
 from datetime import datetime
 from nicegui import app, ui
 from utils.common import add_timezone_to_timestamp, page_init
-from utils.styles import default_styles, severity_styles
+from utils.styles import default_styles, severity_styles, chart_colors
 from db.analytics import (
     get_page_views,
     get_page_views_summary,
@@ -213,7 +213,7 @@ def edit_group(group_id: str) -> None:
             user["active"] = "Yes" if user.get("active", True) else "No"
 
     except httpx.HTTPError as e:
-        ui.label(f"Error fetching group: {e}").classes("text-lg text-red-500")
+        ui.label(f"Error fetching group: {e}").classes("text-lg").style("color: var(--color-text-danger);")
         return
 
     with ui.row().style(
@@ -332,11 +332,15 @@ async def statistics(group_id: str) -> None:
         except (TimeoutError, Exception):
             pass
 
+    is_dark = app.storage.user.get("_resolved_dark", False)
+    cc = chart_colors["dark" if is_dark else "light"]
+
     stats = user_statistics_get(group_id=group_id)
 
     if not stats or "result" not in stats:
         ui.label("Error fetching statistics.").classes(
-            "text-lg text-red-500 text-center mt-6"
+            "text-lg text-center mt-6"
+        ).style("color: var(--color-text-danger);"
         )
         return
 
@@ -381,7 +385,7 @@ async def statistics(group_id: str) -> None:
                     go.Bar(
                         x=dates,
                         y=values,
-                        marker=dict(color="#4F46E5", line=dict(width=0)),
+                        marker=dict(color=cc["bar_current"], line=dict(width=0)),
                         hovertemplate="%{x} - %{y:.1f} minutes<extra></extra>",
                     )
                 ]
@@ -390,9 +394,7 @@ async def statistics(group_id: str) -> None:
                 title="Transcribed minutes per day (current month)",
                 xaxis_title="Date",
                 yaxis_title="Minutes",
-                template="plotly_dark"
-                if app.storage.user.get("_resolved_dark")
-                else "plotly_white",
+                template="plotly_dark" if is_dark else "plotly_white",
                 margin=dict(l=40, r=20, t=60, b=40),
                 height=400,
             )
@@ -409,7 +411,7 @@ async def statistics(group_id: str) -> None:
                     go.Bar(
                         x=dates_prev,
                         y=values_prev,
-                        marker=dict(color="#10B981", line=dict(width=0)),
+                        marker=dict(color=cc["bar_previous"], line=dict(width=0)),
                         hovertemplate="%{x} - %{y:.1f} minutes<extra></extra>",
                     )
                 ]
@@ -418,9 +420,7 @@ async def statistics(group_id: str) -> None:
                 title="Transcribed minutes per day (previous month)",
                 xaxis_title="Date",
                 yaxis_title="Minutes",
-                template="plotly_dark"
-                if app.storage.user.get("_resolved_dark")
-                else "plotly_white",
+                template="plotly_dark" if is_dark else "plotly_white",
                 margin=dict(l=40, r=20, t=60, b=40),
                 height=400,
             )
@@ -661,7 +661,7 @@ def users() -> None:
             )
 
     except httpx.HTTPError as e:
-        ui.label(f"Error fetching users: {e}").classes("text-lg text-red-500")
+        ui.label(f"Error fetching users: {e}").classes("text-lg").style("color: var(--color-text-danger);")
         return
 
     users_table = ui.table(
@@ -831,6 +831,9 @@ async def health() -> None:
         except (TimeoutError, Exception):
             pass
 
+    is_dark = app.storage.user.get("_resolved_dark", False)
+    cc = chart_colors["dark" if is_dark else "light"]
+
     ui.label("System status").classes("text-3xl font-bold mb-4")
 
     @ui.refreshable
@@ -849,7 +852,7 @@ async def health() -> None:
             backend_reachable = False
 
         if not backend_reachable:
-            ui.label("Backend is not reachable").classes("text-lg text-red-500")
+            ui.label("Backend is not reachable").classes("text-lg").style("color: var(--color-text-danger);")
             return
 
         with ui.element("div").classes("health-grid"):
@@ -893,9 +896,9 @@ async def health() -> None:
                         ui.label(host).classes("text-lg font-medium")
 
                         status_color = (
-                            "bg-red-500"
+                            "status-dot-offline"
                             if (datetime.now().timestamp() - seen) > 30
-                            else "bg-green-500"
+                            else "status-dot-online"
                         )
                         status = (
                             "Offline"
@@ -919,9 +922,9 @@ async def health() -> None:
                             y=load_vals,
                             mode="lines",
                             name="Load Avg",
-                            line=dict(color="#3b82f6", width=2.5, shape="spline"),
+                            line=dict(color=cc["line_cpu"], width=2.5, shape="spline"),
                             fill="tozeroy",
-                            fillcolor="rgba(59, 130, 246, 0.1)",
+                            fillcolor=cc["fill_cpu"],
                             hovertemplate="<b>Load</b>: %{y:.1f}<br><extra></extra>",
                         )
                     )
@@ -931,9 +934,9 @@ async def health() -> None:
                             y=mem_vals,
                             mode="lines",
                             name="Memory %",
-                            line=dict(color="#10b981", width=2.5, shape="spline"),
+                            line=dict(color=cc["line_memory"], width=2.5, shape="spline"),
                             fill="tozeroy",
-                            fillcolor="rgba(16, 185, 129, 0.1)",
+                            fillcolor=cc["fill_memory"],
                             hovertemplate="<b>Memory</b>: %{y:.1f}%<br><extra></extra>",
                         )
                     )
@@ -948,9 +951,7 @@ async def health() -> None:
                             font=dict(size=11),
                         ),
                         height=200,
-                        template="plotly_dark"
-                        if app.storage.user.get("_resolved_dark")
-                        else "plotly_white",
+                        template="plotly_dark" if is_dark else "plotly_white",
                         xaxis=dict(
                             title="Time",
                             showgrid=True,
@@ -973,9 +974,9 @@ async def health() -> None:
                                 y=gpu_cpu_vals,
                                 mode="lines",
                                 name="GPU Util%",
-                                line=dict(color="#8b5cf6", width=2.5, shape="spline"),
+                                line=dict(color=cc["line_gpu"], width=2.5, shape="spline"),
                                 fill="tozeroy",
-                                fillcolor="rgba(139, 92, 246, 0.1)",
+                                fillcolor=cc["fill_gpu"],
                                 hovertemplate="<b>GPU Util</b>: %{y:.1f}%<br><extra></extra>",
                             )
                         )
@@ -985,9 +986,9 @@ async def health() -> None:
                                 y=gpu_mem_vals,
                                 mode="lines",
                                 name="GPU Mem%",
-                                line=dict(color="#f59e0b", width=2.5, shape="spline"),
+                                line=dict(color=cc["line_gpu_mem"], width=2.5, shape="spline"),
                                 fill="tozeroy",
-                                fillcolor="rgba(245, 158, 11, 0.1)",
+                                fillcolor=cc["fill_gpu_mem"],
                                 hovertemplate="<b>GPU Memory</b>: %{y:.1f}%<br><extra></extra>",
                             )
                         )
@@ -1003,9 +1004,7 @@ async def health() -> None:
                                 font=dict(size=11),
                             ),
                             height=200,
-                            template="plotly_dark"
-                            if app.storage.user.get("_resolved_dark")
-                            else "plotly_white",
+                            template="plotly_dark" if is_dark else "plotly_white",
                             xaxis=dict(
                                 title="Time",
                                 showgrid=True,
@@ -1030,6 +1029,7 @@ async def health() -> None:
 
 
 def create_customer_dialog(page: callable) -> None:
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
     realms = _get_valid_realms()
 
     with ui.dialog() as create_customer_dialog:
@@ -1193,7 +1193,7 @@ def edit_customer(customer_id: str) -> None:
         ]
 
     except httpx.HTTPError as e:
-        ui.label(f"Error fetching customer: {e}").classes("text-lg text-red-500")
+        ui.label(f"Error fetching customer: {e}").classes("text-lg").style("color: var(--color-text-danger);")
         return
 
     ui.label(f"Edit customer: {customer['name']}").classes("text-3xl font-bold mb-4")
@@ -1412,6 +1412,9 @@ def create_rule_dialog(page: callable) -> None:
     Show a dialog to create a new attribute rule.
     """
 
+    # Re-apply dark mode to prevent state loss during dialog creation
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
+
     onboarding_attrs = attributes_get()
     attr_names = [a["name"] for a in onboarding_attrs]
     all_groups = groups_get()
@@ -1580,6 +1583,9 @@ def edit_rule_dialog(rule: dict, page: callable) -> None:
     """
     Show a dialog to edit an existing attribute rule.
     """
+
+    # Re-apply dark mode to prevent state loss during dialog creation
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
 
     onboarding_attrs = attributes_get()
     attr_names = [a["name"] for a in onboarding_attrs]
@@ -1788,6 +1794,8 @@ def delete_rule_dialog(rule: dict) -> None:
     Show confirmation dialog to delete a rule.
     """
 
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
+
     with ui.dialog() as dialog:
         with ui.card().style("width: 400px; max-width: 90vw;"):
             ui.label("Delete rule").classes("text-2xl font-bold")
@@ -1825,6 +1833,7 @@ def add_attribute_dialog() -> None:
     """
     Show a dialog to add a new onboarding attribute.
     """
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
 
     with ui.dialog() as dialog:
         with ui.card().style("width: 450px; max-width: 90vw;"):
@@ -1907,6 +1916,8 @@ def test_rules_dialog(selected_rules: list[dict]) -> None:
     For list-type values (e.g. affiliations), enter items separated by commas.
     """
 
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
+
     rule = selected_rules[0]
     attr_name = rule.get("attribute_name", "")
     condition = rule.get("attribute_condition", "")
@@ -1961,6 +1972,8 @@ def test_all_rules_dialog() -> None:
     Show a dialog where the user enters attribute name/value pairs and
     simulates provisioning against all enabled rules.
     """
+
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
 
     rules_data = rules_get()
     all_rules = rules_data.get("result", []) if rules_data else []
@@ -2577,6 +2590,8 @@ def _announcement_preview_dialog(message: str, severity: str = "info") -> None:
 def _announcement_create_dialog() -> None:
     """Show dialog to create a new announcement."""
 
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
+
     with ui.dialog() as dialog:
         with ui.card().style("width: 600px; max-width: 90vw; padding: 24px;"):
             ui.label("Create announcement").classes("text-h6 font-bold mb-2")
@@ -2675,6 +2690,8 @@ def _announcement_create_dialog() -> None:
 
 def _announcement_edit_dialog(ann: dict) -> None:
     """Show dialog to edit an existing announcement."""
+
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
 
     with ui.dialog() as dialog:
         with ui.card().style("width: 600px; max-width: 90vw; padding: 24px;"):
@@ -2784,6 +2801,8 @@ def _announcement_edit_dialog(ann: dict) -> None:
 
 def _announcement_delete_confirm(ann: dict) -> None:
     """Show confirmation dialog before deleting an announcement."""
+
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
 
     with ui.dialog() as dialog:
         with ui.card().style("width: 400px; max-width: 90vw; padding: 24px;"):
@@ -2990,6 +3009,8 @@ async def analytics() -> None:
     else:
         is_dark = bool(dark_pref)
 
+    cc = chart_colors["dark" if is_dark else "light"]
+
     ui.label("Activity overview").classes("text-3xl font-bold mb-4")
 
     plotly_template = "plotly_dark" if is_dark else "plotly_white"
@@ -3023,10 +3044,10 @@ async def analytics() -> None:
 
     if wow["change_pct"] is not None:
         sign = "+" if wow["change_pct"] >= 0 else ""
-        wow_color = "#2e7d32" if wow["change_pct"] >= 0 else "#c62828"
+        wow_color = cc["wow_positive"] if wow["change_pct"] >= 0 else cc["wow_negative"]
         wow_display = f'{sign}{wow["change_pct"]}%'
     else:
-        wow_color = "#757575"
+        wow_color = cc["wow_neutral"]
         wow_display = "N/A"
 
     summary = get_page_views_summary()
@@ -3079,8 +3100,8 @@ async def analytics() -> None:
                         x=[f"{h:02d}:00" for h in hours],
                         y=day_names,
                         colorscale=[
-                            [0, "#1e1e1e" if is_dark else "#f5f5f5"],
-                            [0.25, "#1a3a5c" if is_dark else "#bbdefb"],
+                            [0, cc["heatmap_zero"]],
+                            [0.25, cc["heatmap_low"]],
                             [0.5, "#42a5f5"],
                             [0.75, "#1565c0"],
                             [1, "#0d47a1"],
@@ -3095,9 +3116,7 @@ async def analytics() -> None:
                     )
                 )
                 fig.update_layout(
-                    template="plotly_dark"
-                    if app.storage.user.get("_resolved_dark")
-                    else "plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=50, r=20, t=20, b=40),
                     xaxis_title="Hour of Day",
@@ -3127,15 +3146,13 @@ async def analytics() -> None:
                     go.Bar(
                         x=[f"{h:02d}:00" for h in all_hours],
                         y=all_views,
-                        marker_color="#1565c0",
+                        marker_color=cc["hourly_bar"],
                     )
                 )
                 fig.update_layout(
                     xaxis_title="Hour of Day",
                     yaxis_title="Views",
-                    template="plotly_dark"
-                    if app.storage.user.get("_resolved_dark")
-                    else "plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3171,9 +3188,7 @@ async def analytics() -> None:
                 fig.update_layout(
                     xaxis_title="Date",
                     yaxis_title="Views",
-                    template="plotly_dark"
-                    if app.storage.user.get("_resolved_dark")
-                    else "plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3191,7 +3206,7 @@ async def analytics() -> None:
                         x=[r["path"] for r in summary],
                         y=[r["total_views"] for r in summary],
                         name="All Time",
-                        marker_color="#082954",
+                        marker_color=cc["bar_primary"],
                     )
                 )
                 fig.add_trace(
@@ -3199,16 +3214,14 @@ async def analytics() -> None:
                         x=[r["path"] for r in summary],
                         y=[r["views_30d"] for r in summary],
                         name="Last 30 Days",
-                        marker_color="#4caf50",
+                        marker_color=cc["bar_secondary"],
                     )
                 )
                 fig.update_layout(
                     barmode="group",
                     xaxis_title="Page",
                     yaxis_title="Views",
-                    template="plotly_dark"
-                    if app.storage.user.get("_resolved_dark")
-                    else "plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3230,15 +3243,13 @@ async def analytics() -> None:
                     go.Bar(
                         x=[r["date"] for r in daily],
                         y=[r["views"] for r in daily],
-                        marker_color="#082954",
+                        marker_color=cc["bar_primary"],
                     )
                 )
                 fig.update_layout(
                     xaxis_title="Date",
                     yaxis_title="Page Views",
-                    template="plotly_dark"
-                    if app.storage.user.get("_resolved_dark")
-                    else "plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3300,9 +3311,7 @@ async def analytics() -> None:
                     barmode="stack",
                     xaxis_title="Date",
                     yaxis_title="Count",
-                    template="plotly_dark"
-                    if app.storage.user.get("_resolved_dark")
-                    else "plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3323,7 +3332,7 @@ async def analytics() -> None:
                         x=action_names,
                         y=[r["total_views"] for r in action_summary],
                         name="All Time",
-                        marker_color="#082954",
+                        marker_color=cc["bar_primary"],
                     )
                 )
                 fig.add_trace(
@@ -3331,16 +3340,14 @@ async def analytics() -> None:
                         x=action_names,
                         y=[r["views_30d"] for r in action_summary],
                         name="Last 30 Days",
-                        marker_color="#4caf50",
+                        marker_color=cc["bar_secondary"],
                     )
                 )
                 fig.update_layout(
                     barmode="group",
                     xaxis_title="Action",
                     yaxis_title="Count",
-                    template="plotly_dark"
-                    if app.storage.user.get("_resolved_dark")
-                    else "plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
