@@ -1420,7 +1420,7 @@ def create_rule_dialog(page: callable) -> None:
 
     if not is_bofh:
         user_data = get_user_data() or {}
-        admin_domains = user_data.get("admin_domains", "")
+        admin_domains = user_data.get("admin_domains") or ""
         allowed_realms = [
             d.strip()
             for d in admin_domains.split(",")
