@@ -207,20 +207,29 @@ async def index(request: Request) -> None:
         except (TimeoutError, Exception):
             pass
 
+    # Client may have disconnected during the awaits above; user storage is
+    # torn down on disconnect, so skip remaining work to avoid an
+    # AssertionError on session lookup.
+    if not client.has_socket_connection:
+        return
+
     app.storage.user["timezone"] = timezone
 
     # Always use auto mode on the landing page (user hasn't logged in yet)
     ui.dark_mode(None)
 
     prefers_dark = False
-    if client.has_socket_connection:
-        try:
-            prefers_dark = await ui.run_javascript(
-                "window.matchMedia('(prefers-color-scheme: dark)').matches",
-                timeout=5.0,
-            )
-        except (TimeoutError, Exception):
-            pass
+    try:
+        prefers_dark = await ui.run_javascript(
+            "window.matchMedia('(prefers-color-scheme: dark)').matches",
+            timeout=5.0,
+        )
+    except (TimeoutError, Exception):
+        pass
+
+    if not client.has_socket_connection:
+        return
+
     app.storage.user["_resolved_dark"] = bool(prefers_dark)
 
     if (
