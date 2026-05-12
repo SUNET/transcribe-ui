@@ -19,7 +19,6 @@ from nicegui import app, ui
 from utils.common import page_init
 from utils.styles import default_styles
 from utils.helpers import (
-    dark_mode_get,
     dark_mode_save,
     email_get,
     email_save,
@@ -84,20 +83,24 @@ def create() -> None:
                 with ui.column().classes("gap-2 mt-2 mb-6"):
                     with ui.row().classes("items-center gap-3"):
                         ui.icon("person").style("font-size: 20px;")
-                        ui.label("Username").classes("font-medium text-theme-secondary").style(
-                            "min-width: 140px;"
+                        ui.label("Username").classes(
+                            "font-medium text-theme-secondary"
+                        ).style("min-width: 140px;")
+                        ui.label(userdata["username"]).classes(
+                            "text-theme-primary"
+                        ).style("cursor: pointer; text-decoration: underline;").on(
+                            "click", lambda: show_user_token()
                         )
-                        ui.label(userdata["username"]).classes("text-theme-primary").style(
-                            "cursor: pointer; text-decoration: underline;"
-                        ).on("click", lambda: show_user_token())
                         ui.tooltip("Click to view your API token")
 
                     with ui.row().classes("items-center gap-3"):
                         ui.icon("fingerprint").style("font-size: 20px;")
-                        ui.label("User id").classes("font-medium text-theme-secondary").style(
-                            "min-width: 140px;"
+                        ui.label("User id").classes(
+                            "font-medium text-theme-secondary"
+                        ).style("min-width: 140px;")
+                        ui.label(userdata["user_id"]).classes(
+                            "text-theme-muted text-sm"
                         )
-                        ui.label(userdata["user_id"]).classes("text-theme-muted text-sm")
 
                     with ui.row().classes("items-center gap-3"):
                         ui.icon("schedule").style("font-size: 20px;")
@@ -108,9 +111,9 @@ def create() -> None:
 
                     with ui.row().classes("items-center gap-3"):
                         ui.icon("public").style("font-size: 20px;")
-                        ui.label("Timezone").classes("font-medium text-theme-secondary").style(
-                            "min-width: 140px;"
-                        )
+                        ui.label("Timezone").classes(
+                            "font-medium text-theme-secondary"
+                        ).style("min-width: 140px;")
                         ui.label(app.storage.user.get("timezone", "UTC")).classes(
                             "text-theme-primary"
                         )
@@ -136,7 +139,11 @@ def create() -> None:
                 ui.separator()
 
                 with ui.column().classes("gap-2 mt-2 mb-6"):
-                    dark_options = {"off": "Light", "on": "Dark", "auto": "Auto (System)"}
+                    dark_options = {
+                        "off": "Light",
+                        "on": "Dark",
+                        "auto": "Auto (System)",
+                    }
 
                     # Current value: True -> "on", False -> "off", None -> "auto"
                     raw = app.storage.user.get("dark_mode", None)
@@ -166,19 +173,23 @@ def create() -> None:
                             dark_mode_save(None)
                             icon_name = "brightness_auto"
                         # Update header dark mode icon without reload
-                        ui.run_javascript(f'''
+                        ui.run_javascript(
+                            f"""
                             document.querySelectorAll(".header-btn .q-icon").forEach(el => {{
                                 if (["dark_mode", "light_mode", "brightness_auto"].includes(el.textContent.trim())) {{
                                     el.textContent = "{icon_name}";
                                 }}
                             }});
-                        ''')
+                        """
+                        )
 
                     ui.toggle(
                         dark_options,
                         value=current_dark,
                         on_change=lambda e: set_dark_mode(e.value),
-                    ).props("toggle-color=primary no-caps").tooltip("Light: always light, Dark: always dark, Auto: follow system settings.")
+                    ).props("toggle-color=primary no-caps").tooltip(
+                        "Light: always light, Dark: always dark, Auto: follow system settings."
+                    )
 
             # ── Right column: Notifications ──
             with ui.column().classes("flex-1"):
@@ -190,7 +201,9 @@ def create() -> None:
                 weekly_report = None
 
                 with ui.column().classes("gap-1 mt-2"):
-                    ui.label("Personal").classes("font-medium text-theme-secondary mb-1")
+                    ui.label("Personal").classes(
+                        "font-medium text-theme-secondary mb-1"
+                    )
                     ui.label(
                         "Notifications related to your own files and activity."
                     ).classes("text-sm text-theme-muted mb-2")
@@ -237,7 +250,9 @@ def create() -> None:
 
                 if get_admin_status():
                     with ui.column().classes("gap-1 mt-4"):
-                        ui.label("Administration").classes("font-medium text-theme-secondary mb-1")
+                        ui.label("Administration").classes(
+                            "font-medium text-theme-secondary mb-1"
+                        )
                         ui.label(
                             "Notifications related to administrative tasks."
                         ).classes("text-sm text-theme-muted mb-2")
@@ -295,5 +310,3 @@ def create() -> None:
                         weekly_report.tooltip(
                             "Get a weekly email with a summary of transcription usage."
                         )
-
-
