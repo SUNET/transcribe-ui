@@ -232,15 +232,19 @@ async def index(request: Request) -> None:
 
         # Sync dark mode preference from backend
         # Backend stores "dark", "light", or "auto"
-        raw_dark = user_data.get("dark_mode", "auto")
-        if raw_dark == "dark":
-            app.storage.user["dark_mode"] = True
-        elif raw_dark == "light":
-            app.storage.user["dark_mode"] = False
-        else:
-            app.storage.user["dark_mode"] = None
+        match user_data.get("dark_mode", "auto"):
+            case "dark":
+                app.storage.user["dark_mode"] = True
+            case "light":
+                app.storage.user["dark_mode"] = False
+            case _:
+                app.storage.user["dark_mode"] = None
+
         ui.dark_mode(app.storage.user["dark_mode"])
 
+        # If the user has encryption settings but no password in storage,
+        # prompt for password. If the user has no encryption settings, prompt
+        # to set a password.
         if not user_data["encryption_settings"]:
             # ---------------------------------------------------------------
             # First-time setup: user chooses passphrase or passkey.
@@ -548,7 +552,9 @@ async def index(request: Request) -> None:
                             "background-color: var(--color-warning-bg); border: 1px solid var(--color-warning-border); padding: 20px; margin-top: 20px; min-height: 160px;"
                         ):
                             with ui.column().classes("items-center gap-3"):
-                                ui.icon("warning", size="lg").style("color: var(--color-warning-icon);")
+                                ui.icon("warning", size="lg").style(
+                                    "color: var(--color-warning-icon);"
+                                )
                                 ui.label("Account pending activation").classes(
                                     "text-h6"
                                 )
