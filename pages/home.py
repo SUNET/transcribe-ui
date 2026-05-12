@@ -210,6 +210,11 @@ def create() -> None:
             """
             rows = await jobs_get()
 
+            # Backend fetch failed; keep existing rows so table doesn't blank
+            # out during long operations like uploads.
+            if rows is None:
+                return
+
             if not rows:
                 delete.set_enabled(False)
                 bulk_export.set_enabled(False)
