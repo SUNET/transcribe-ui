@@ -659,14 +659,14 @@ def add_timezone_to_timestamp(timestamp: str) -> str:
     return local_time.strftime("%Y-%m-%d %H:%M")
 
 
-async def jobs_get() -> list:
+async def jobs_get() -> list | None:
     """
     Get the list of transcription jobs from the API.
     """
     jobs = []
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             response = await client.request(
                 "GET",
                 f"{settings.API_URL}/api/v1/transcriber",
@@ -679,7 +679,7 @@ async def jobs_get() -> list:
             )
             response.raise_for_status()
     except httpx.HTTPError:
-        return []
+        return None
 
     # Get current time in user's timezone
     user_timezone = app.storage.user.get("timezone", "UTC")
@@ -1061,7 +1061,9 @@ async def handle_upload_with_feedback(files, dialog, table):
 
         # Refresh with real data from backend
         if not client._deleted:
-            table.update_rows(await jobs_get(), clear_selection=False)
+            fresh_rows = await jobs_get()
+            if fresh_rows is not None:
+                table.update_rows(fresh_rows, clear_selection=False)
 
     asyncio.create_task(_upload())
 
@@ -1309,7 +1311,9 @@ async def __delete_files(table: ui.table, dialog: ui.dialog) -> None:
             failed += 1
 
     table.selected = []
-    table.update_rows(await jobs_get(), clear_selection=True)
+    fresh_rows = await jobs_get()
+    if fresh_rows is not None:
+        table.update_rows(fresh_rows, clear_selection=True)
 
     if failed == 0:
         ui.notify(
