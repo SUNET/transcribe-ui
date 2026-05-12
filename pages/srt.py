@@ -17,6 +17,9 @@
 
 import httpx
 
+from html import escape as html_escape
+from uuid import UUID
+
 from nicegui import app, ui
 from utils.common import get_auth_header
 from utils.styles import default_styles
@@ -40,6 +43,13 @@ def create() -> None:
         Display the result of the transcription job.
         """
         page_init(use_drawer=True)
+
+        try:
+            UUID(uuid)
+        except (ValueError, TypeError):
+            ui.label("Invalid job identifier.").classes("text-h6")
+            return
+
         editor = SRTEditor(uuid, data_format, filename)
         editor.setup_beforeunload_warning()
 
@@ -199,7 +209,7 @@ def create() -> None:
                                 "align-self: center;"
                             )
                             ui.html(
-                                f"<b>Transcription language:</b> {language}",
+                                f"<b>Transcription language:</b> {html_escape(language)}",
                                 sanitize=False,
                             ).classes("text-sm")
                             html_wpm = ui.html(
