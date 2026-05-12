@@ -16,7 +16,6 @@
 # limitations under the License.
 
 import asyncio
-import re
 import httpx
 import pytz
 
@@ -118,7 +117,7 @@ def show_help_dialog() -> None:
                         (
                             "2",
                             "Start transcription",
-                            'Click Transcribe and choose your settings.',
+                            "Click Transcribe and choose your settings.",
                             "rtt",
                         ),
                         (
@@ -337,15 +336,18 @@ def page_init(header_text: Optional[str] = "", use_drawer: bool = False) -> None
 
     async def _cycle_dark_mode(btn=None):
         current = app.storage.user.get("dark_mode", None)
+
         if current is None:
             new_val = True
         elif current:
             new_val = False
         else:
             new_val = None
+
         app.storage.user["dark_mode"] = new_val
         dark_mode_el.value = new_val
         dark_mode_save(new_val)
+
         # Resolve the actual dark state (needed for Plotly chart templates)
         if new_val is not None:
             app.storage.user["_resolved_dark"] = bool(new_val)
@@ -384,7 +386,6 @@ def page_init(header_text: Optional[str] = "", use_drawer: bool = False) -> None
             drawer.props(add="mini")
 
         menu_tooltips = []
-
         menu_btn = None
 
         def toggle_drawer():
@@ -781,31 +782,32 @@ async def post_file(
     """
     total_size = file_upload.size()
     data = await file_upload.read()
-    pos = 0
-    bytes_sent = 0
 
     class ProgressReader:
         """Read bytes with progress tracking, no BytesIO copy."""
 
+        def __init__(self, buf: bytes):
+            self._data = buf
+            self._pos = 0
+            self._bytes_sent = 0
+
         def read(self, size: int = -1) -> bytes:
-            nonlocal pos, bytes_sent
-
             if size is None or size < 0:
-                chunk = data[pos:]
-                pos = len(data)
+                chunk = self._data[self._pos :]
+                self._pos = len(self._data)
             else:
-                end = min(pos + size, len(data))
-                chunk = data[pos:end]
-                pos = end
+                end = min(self._pos + size, len(self._data))
+                chunk = self._data[self._pos : end]
+                self._pos = end
 
-            bytes_sent += len(chunk)
+            self._bytes_sent += len(chunk)
 
             if on_progress and total_size > 0:
-                on_progress(min(int(bytes_sent * 100 / total_size), 100))
+                on_progress(min(int(self._bytes_sent * 100 / total_size), 100))
 
             return chunk
 
-    reader = ProgressReader()
+    reader = ProgressReader(data)
     files_json = {"file": (filename, reader)}
 
     try:

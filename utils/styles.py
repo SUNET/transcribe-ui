@@ -23,10 +23,6 @@ All theme-sensitive colors are defined as CSS custom properties under
 needed to enable dark mode.
 """
 
-# ---------------------------------------------------------------------------
-# CSS custom properties + class definitions
-# ---------------------------------------------------------------------------
-
 theme_styles = """
 <style>
     /* ── Theme variables (light mode) ── */
@@ -845,7 +841,9 @@ menu_item_style = (
     " white-space: nowrap; overflow: hidden;"
 )
 
-menu_active_style = " background-color: var(--color-bg-surface-hover); font-weight: 600;"
+menu_active_style = (
+    " background-color: var(--color-bg-surface-hover); font-weight: 600;"
+)
 
 # ---------------------------------------------------------------------------
 # Table column definitions
