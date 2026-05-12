@@ -781,23 +781,26 @@ async def post_file(
         on_progress: Optional callback(percent: int) called during upload.
     """
     total_size = file_upload.size()
-    data = await file_upload.read()
 
     class ProgressReader:
-        """Read bytes with progress tracking, no BytesIO copy."""
+        """Read bytes with progress tracking; releases buffer ref after consumption."""
 
-        def __init__(self, buf: bytes):
-            self._data = buf
+        def __init__(self, src):
+            self._src = src
             self._pos = 0
             self._bytes_sent = 0
 
         def read(self, size: int = -1) -> bytes:
+            buf = self._src
+            if buf is None:
+                return b""
+
             if size is None or size < 0:
-                chunk = self._data[self._pos :]
-                self._pos = len(self._data)
+                chunk = buf[self._pos :]
+                self._pos = len(buf)
             else:
-                end = min(self._pos + size, len(self._data))
-                chunk = self._data[self._pos : end]
+                end = min(self._pos + size, len(buf))
+                chunk = buf[self._pos : end]
                 self._pos = end
 
             self._bytes_sent += len(chunk)
@@ -805,9 +808,12 @@ async def post_file(
             if on_progress and total_size > 0:
                 on_progress(min(int(self._bytes_sent * 100 / total_size), 100))
 
+            if self._pos >= len(buf):
+                self._src = None
+
             return chunk
 
-    reader = ProgressReader(data)
+    reader = ProgressReader(await file_upload.read())
     files_json = {"file": (filename, reader)}
 
     try:
@@ -832,7 +838,7 @@ async def post_file(
         )
         return False
     finally:
-        del data
+        reader._src = None
 
     return True
 
@@ -899,7 +905,20 @@ def table_upload(table) -> None:
                         upload_column, status_column, dialog
                     ),
                 )
-                upload.on("finish", lambda _: dialog.close())
+
+                def _cleanup_dialog():
+                    ui.run_javascript(
+                        f"const upl = getElement({upload.id});"
+                        f"if (upl && upl._cleanup) upl._cleanup();"
+                    )
+                    try:
+                        upload.reset()
+                    except Exception:
+                        pass
+                    dialog.close()
+                    dialog.delete()
+
+                upload.on("finish", lambda _: _cleanup_dialog())
 
                 def on_byte_progress(e):
                     uploaded = e.args.get("uploaded", 0)
@@ -945,7 +964,7 @@ def table_upload(table) -> None:
                         "  dz.querySelector('div').classList.remove('dropzone-drag');"
                         "  upl.$refs.qRef.addFiles(Array.from(e.dataTransfer.files));"
                         "});"
-                        "setInterval(() => {"
+                        "const progressInterval = setInterval(() => {"
                         "  const qRef = upl.$refs.qRef;"
                         "  if (!qRef || !qRef.files || qRef.files.length === 0) return;"
                         "  let totalSize = 0, uploaded = 0, currentFile = '';"
@@ -962,6 +981,11 @@ def table_upload(table) -> None:
                         "    });"
                         "  }"
                         "}, 500);"
+                        "upl._cleanup = () => {"
+                        "  clearInterval(progressInterval);"
+                        "  const qRef = upl.$refs.qRef;"
+                        "  if (qRef) { try { qRef.reset(); } catch (e) {} }"
+                        "};"
                     ),
                     once=True,
                 )
@@ -969,7 +993,7 @@ def table_upload(table) -> None:
                     with ui.button(
                         "Cancel",
                         icon="cancel",
-                        on_click=lambda: dialog.close(),
+                        on_click=lambda: _cleanup_dialog(),
                     ) as cancel:
                         cancel.props("color=black flat")
                         cancel.classes("cancel-style")
@@ -1056,6 +1080,8 @@ async def handle_upload_with_feedback(files, dialog, table):
                             timeout=5000,
                         )
             finally:
+                if hasattr(file_upload, "_data"):
+                    file_upload._data = b""
                 file_items[idx] = (file_name, None)
                 file_upload = None
 
