@@ -103,6 +103,14 @@ def show_help_dialog() -> None:
                     ui.label(
                         "Turn audio and video into searchable text or subtitles. Built for research and education, with privacy and accuracy at its core."
                     ).classes("text-body1")
+                    if settings.MANUAL_URL:
+                        with ui.row().classes("items-center gap-1 mt-2"):
+                            ui.label("Manual:").classes("text-body2")
+                            ui.link(
+                                "Open the user manual",
+                                settings.MANUAL_URL,
+                                new_tab=True,
+                            ).classes("text-body2")
 
                 ui.label("Getting started").classes("text-h6 font-bold mt-2")
 
