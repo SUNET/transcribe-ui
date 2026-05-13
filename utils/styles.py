@@ -500,6 +500,13 @@ theme_styles = """
     .deletion-warning-icon {
         font-size: 18px;
     }
+    .body--dark .deletion-warning {
+        color: #ff8a80;
+        font-weight: 700;
+    }
+    .body--dark .deletion-warning-icon {
+        color: #ff8a80;
+    }
 
     /* ── Tooltip ── */
     .q-tooltip {
