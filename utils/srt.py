@@ -958,6 +958,7 @@ class SRTEditor:
             self.seconds_to_timestamp(mid_seconds),
             self.seconds_to_timestamp(end_seconds),
             second_part,
+            speaker=caption.speaker,
         )
 
         # Insert new caption
@@ -993,6 +994,7 @@ class SRTEditor:
             self.seconds_to_timestamp(start_seconds),
             self.seconds_to_timestamp(end_seconds),
             "New caption text",
+            speaker=caption.speaker,
         )
 
         # Insert new caption
@@ -1225,7 +1227,7 @@ class SRTEditor:
         """
 
         for caption in self.captions:
-            if caption.get_start_seconds() <= caption_time <= caption.get_end_seconds():
+            if caption.get_start_seconds() <= caption_time < caption.get_end_seconds():
                 return caption
 
         return None
@@ -1335,6 +1337,7 @@ class SRTEditor:
                         )
 
                         if self.data_format == "txt":
+                            self.speakers.add(caption.speaker)
                             speaker_select = ui.select(
                                 options=list(self.speakers),
                                 value=caption.speaker,
