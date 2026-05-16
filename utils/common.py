@@ -132,7 +132,7 @@ def show_help_dialog() -> None:
                             "3",
                             "Processing",
                             "Your files are processed in the background. You can safely close the browser in the meantime.",
-                            "clock_loader_60",
+                            "blender",
                         ),
                         (
                             "4",
