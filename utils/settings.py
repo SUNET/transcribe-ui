@@ -67,7 +67,7 @@ class Settings(BaseSettings):
         "Russian",
         "Ukrainian",
         "Icelandic",
-        "Northern Sámi",
+        "Northern Sámi (Experimental)",
     ]
 
 
