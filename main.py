@@ -24,7 +24,7 @@ from pages.home import create as create_files_table
 from pages.srt import create as create_srt
 from pages.status import create as create_status
 from pages.user import create as create_user_page
-from utils.common import default_styles
+from utils.styles import default_styles
 from utils.settings import get_settings
 from utils.token import get_user_data, get_user_status, get_token_is_valid
 from utils.helpers import (
@@ -66,15 +66,42 @@ async def index(request: Request) -> None:
     if token:
         app.storage.user["token"] = token
 
+    client = ui.context.client
+
     # Set the users timezone
-    try:
-        timezone = await ui.run_javascript(
-            "Intl.DateTimeFormat().resolvedOptions().timeZone", timeout=5.0
-        )
-    except TimeoutError:
-        timezone = "UTC"
+    timezone = "UTC"
+    if client.has_socket_connection:
+        try:
+            timezone = await ui.run_javascript(
+                "Intl.DateTimeFormat().resolvedOptions().timeZone", timeout=5.0
+            )
+        except (TimeoutError, Exception):
+            pass
+
+    # Client may have disconnected during the awaits above; user storage is
+    # torn down on disconnect, so skip remaining work to avoid an
+    # AssertionError on session lookup.
+    if not client.has_socket_connection:
+        return
 
     app.storage.user["timezone"] = timezone
+
+    # Always use auto mode on the landing page (user hasn't logged in yet)
+    ui.dark_mode(None)
+
+    prefers_dark = False
+    try:
+        prefers_dark = await ui.run_javascript(
+            "window.matchMedia('(prefers-color-scheme: dark)').matches",
+            timeout=5.0,
+        )
+    except (TimeoutError, Exception):
+        pass
+
+    if not client.has_socket_connection:
+        return
+
+    app.storage.user["_resolved_dark"] = bool(prefers_dark)
 
     if (
         app.storage.user.get("token")
@@ -83,6 +110,21 @@ async def index(request: Request) -> None:
     ):
         user_data = get_user_data()
 
+        # Sync dark mode preference from backend
+        # Backend stores "dark", "light", or "auto"
+        match user_data.get("dark_mode", "auto"):
+            case "dark":
+                app.storage.user["dark_mode"] = True
+            case "light":
+                app.storage.user["dark_mode"] = False
+            case _:
+                app.storage.user["dark_mode"] = None
+
+        ui.dark_mode(app.storage.user["dark_mode"])
+
+        # If the user has encryption settings but no password in storage,
+        # prompt for password. If the user has no encryption settings, prompt
+        # to set a password.
         if not user_data["encryption_settings"]:
             with ui.dialog() as dialog:
                 with ui.card():
@@ -226,10 +268,12 @@ async def index(request: Request) -> None:
 
                     if is_not_activated:
                         with ui.card().classes("w-full no-shadow").style(
-                            "background-color: #fff3cd; border: 1px solid #ffc107; padding: 20px; margin-top: 20px; min-height: 160px;"
+                            "background-color: var(--color-warning-bg); border: 1px solid var(--color-warning-border); padding: 20px; margin-top: 20px; min-height: 160px;"
                         ):
                             with ui.column().classes("items-center gap-3"):
-                                ui.icon("warning", size="lg").style("color: #ff9800;")
+                                ui.icon("warning", size="lg").style(
+                                    "color: var(--color-warning-icon);"
+                                )
                                 ui.label("Account pending activation").classes(
                                     "text-h6"
                                 )

@@ -15,6 +15,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
+
 import httpx
 
 from nicegui import app, ui
@@ -24,6 +26,19 @@ from utils.settings import get_settings
 from utils.token import get_auth_header
 
 settings = get_settings()
+
+
+def sanitize_filename(filename: str) -> str:
+    """
+    Remove or replace characters that are unsafe in filenames.
+    """
+    # Replace path separators and null bytes
+    filename = filename.replace("/", "_").replace("\\", "_").replace("\x00", "")
+    # Remove other problematic characters
+    filename = re.sub(r'[<>:"|?*\x01-\x1f]', "_", filename)
+    # Strip leading/trailing dots and spaces
+    filename = filename.strip(". ")
+    return filename or "unnamed"
 
 
 def storage_encrypt(plaintext: str) -> str:
@@ -321,9 +336,7 @@ def email_get() -> str:
     """
 
     try:
-        response = httpx.get(
-            f"{settings.API_URL}/api/v1/me", headers=get_auth_header()
-        )
+        response = httpx.get(f"{settings.API_URL}/api/v1/me", headers=get_auth_header())
         response.raise_for_status()
         data = response.json()
 
@@ -394,9 +407,7 @@ def email_save_notifications_get() -> dict:
     """
 
     try:
-        response = httpx.get(
-            f"{settings.API_URL}/api/v1/me", headers=get_auth_header()
-        )
+        response = httpx.get(f"{settings.API_URL}/api/v1/me", headers=get_auth_header())
         response.raise_for_status()
         data = response.json()
 
@@ -414,6 +425,44 @@ def email_save_notifications_get() -> dict:
     except httpx.HTTPError:
         ui.notify("Failed to retrieve notification preferences", color="red")
         return {}
+
+
+def dark_mode_save(enabled: Optional[bool]) -> None:
+    """
+    Save the user's dark mode preference to the backend.
+    True → "dark", False → "light", None → "auto".
+    """
+
+    if enabled is None:
+        value = "auto"
+    elif enabled:
+        value = "dark"
+    else:
+        value = "light"
+
+    try:
+        response = httpx.put(
+            f"{settings.API_URL}/api/v1/me",
+            headers=get_auth_header(),
+            json={"dark_mode": value},
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        ui.notify("Failed to save dark mode preference", color="red")
+
+
+def dark_mode_get() -> bool:
+    """
+    Get the user's dark mode preference from the backend.
+    """
+
+    try:
+        response = httpx.get(f"{settings.API_URL}/api/v1/me", headers=get_auth_header())
+        response.raise_for_status()
+        data = response.json()
+        return data["result"].get("dark_mode", False)
+    except httpx.HTTPError:
+        return False
 
 
 def test_all_notifications() -> None:
@@ -668,9 +717,7 @@ def reset_manual_override(selected_rows: list) -> None:
     ui.navigate.to("/admin/users")
 
 
-def save_domains(
-    selected_rows: list, domains: list, dialog: ui.dialog
-) -> None:
+def save_domains(selected_rows: list, domains: list, dialog: ui.dialog) -> None:
     """
     Save allowed domains for selected users.
     """
@@ -702,16 +749,12 @@ def get_customer_realms(user_realms: set[str]) -> list[str]:
 
     customers_data = customers_get()
     customers = (
-        customers_data.get("result", [])
-        if isinstance(customers_data, dict)
-        else []
+        customers_data.get("result", []) if isinstance(customers_data, dict) else []
     )
 
     customer_realms = []
     for c in customers:
-        c_realms = [
-            r.strip() for r in (c.get("realms") or "").split(",") if r.strip()
-        ]
+        c_realms = [r.strip() for r in (c.get("realms") or "").split(",") if r.strip()]
         if user_realms & set(c_realms):
             customer_realms.extend(c_realms)
     realms = sorted(set(customer_realms))

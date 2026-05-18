@@ -15,12 +15,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import httpx
 
+from html import escape as html_escape
+from uuid import UUID
+
 from nicegui import app, ui
-from utils.common import default_styles
 from utils.common import get_auth_header
+from utils.styles import default_styles
 from utils.common import page_init
 from utils.helpers import storage_decrypt
 from utils.settings import get_settings
@@ -32,29 +34,6 @@ create_video_proxy()
 settings = get_settings()
 
 
-def save_srt(job_id: str, data: str, editor: SRTEditor, data_format: str) -> None:
-    try:
-        jsondata = {"format": data_format, "data": data}
-
-        headers = get_auth_header()
-        res = httpx.put(
-            f"{settings.API_URL}/api/v1/transcriber/{job_id}/result",
-            headers=headers,
-            json=jsondata,
-        )
-        res.raise_for_status()
-    except httpx.HTTPError as e:
-        ui.notify(f"Error: Failed to save file: {e}", type="negative")
-        return
-
-    ui.notify(
-        "File saved successfully",
-        type="positive",
-        position="bottom",
-        icon="check_circle",
-    )
-
-
 def create() -> None:
     @ui.page("/srt")
     def result(
@@ -64,6 +43,13 @@ def create() -> None:
         Display the result of the transcription job.
         """
         page_init(use_drawer=True)
+
+        try:
+            UUID(uuid)
+        except (ValueError, TypeError):
+            ui.label("Invalid job identifier.").classes("text-h6")
+            return
+
         editor = SRTEditor(uuid, data_format, filename)
         editor.setup_beforeunload_warning()
 
@@ -165,38 +151,18 @@ def create() -> None:
             with ui.column().classes("flex-row items-center"):
                 editor.create_undo_redo_panel()
                 with ui.button("Save", icon="save") as save_button:
-                    if data_format == "srt":
-                        save_button.on(
-                            "click",
-                            lambda: save_srt(
-                                uuid,
-                                editor.export_srt(),
-                                editor,
-                                data_format,
-                            ),
-                        )
-                    else:
-                        save_button.on(
-                            "click",
-                            lambda: save_srt(
-                                uuid,
-                                json.dumps(editor.export_json()),
-                                editor,
-                                "json",
-                            ),
-                        )
-
-                    save_button.props("color=black flat")
+                    save_button.on("click", lambda: editor.save_srt_changes())
+                    save_button.props("flat").classes("editor-btn editor-toolbar-btn")
 
                 # Export button - opens dialog
-                ui.button("Export", icon="download").props("flat color=black").on(
-                    "click", lambda: editor.show_export_dialog(filename)
-                )
+                ui.button("Export", icon="download").props("flat").classes(
+                    "editor-btn editor-toolbar-btn"
+                ).on("click", lambda: editor.show_export_dialog(filename))
 
                 if data_format == "srt":
                     with ui.button("Validate", icon="check").props(
-                        "flat color=black"
-                    ) as validate_button:
+                        "flat"
+                    ).classes("editor-btn editor-toolbar-btn") as validate_button:
                         validate_button.on(
                             "click",
                             lambda: editor.validate_captions(),
@@ -204,8 +170,8 @@ def create() -> None:
                 editor.create_search_panel()
                 editor.show_keyboard_shortcuts()
             with ui.button("Close editor", icon="close").props(
-                "flat color=black"
-            ) as close_button:
+                "flat"
+            ).classes("editor-btn editor-toolbar-btn") as close_button:
                 close_button.on("click", lambda: editor.close_editor("/home"))
 
         with ui.splitter(value=60).classes("w-full h-full") as splitter:
@@ -238,12 +204,12 @@ def create() -> None:
                         autoscroll.on(
                             "click", lambda: editor.set_autoscroll(autoscroll.value)
                         )
-                        with ui.column().classes("bg-gray-100 p-4 w-full"):
+                        with ui.column().classes("srt-info-panel p-4 w-full"):
                             ui.label(filename).classes("text-h6").style(
                                 "align-self: center;"
                             )
                             ui.html(
-                                f"<b>Transcription language:</b> {language}",
+                                f"<b>Transcription language:</b> {html_escape(language)}",
                                 sanitize=False,
                             ).classes("text-sm")
                             html_wpm = ui.html(

@@ -17,10 +17,8 @@
 
 from nicegui import ui, events
 from utils.common import (
-    default_styles,
     page_init,
     jobs_get,
-    jobs_columns,
     table_click,
     table_upload,
     table_delete,
@@ -28,6 +26,7 @@ from utils.common import (
     table_bulk_export,
     table_bulk_transcribe,
 )
+from utils.styles import default_styles, jobs_columns
 
 
 def create() -> None:
@@ -61,15 +60,21 @@ def create() -> None:
             if not has_selection:
                 export_tooltip.text = "Select one or more files to export"
             elif len(completed) >= 1 and len(formats) > 1:
-                export_tooltip.text = "Subtitles and Transcript can't be exported together."
+                export_tooltip.text = (
+                    "Subtitles and Transcript can't be exported together."
+                )
             elif len(completed) >= 1 and len(formats) == 1:
                 export_tooltip.text = "Export selected files"
             else:
-                export_tooltip.text = "Select one or more already completed files to export"
+                export_tooltip.text = (
+                    "Select one or more already completed files to export"
+                )
 
             # Enable bulk transcribe when 1+ uploaded jobs are selected
             uploaded = [r for r in selected if r.get("status") == "Uploaded"]
-            already_transcribed = [r for r in selected if r.get("status") == "Completed"]
+            already_transcribed = [
+                r for r in selected if r.get("status") == "Completed"
+            ]
             bulk_transcribe.set_enabled(len(uploaded) >= 1)
 
             # Update transcribe tooltip
@@ -114,7 +119,9 @@ def create() -> None:
             if e.args.get("status") == "Completed":
                 table_click(e)
             else:
-                table_transcribe(e.args, on_complete=lambda: ui.timer(0.1, update_rows, once=True))
+                table_transcribe(
+                    e.args, on_complete=lambda: ui.timer(0.1, update_rows, once=True)
+                )
 
         ui.add_head_html(default_styles)
 
@@ -132,9 +139,7 @@ def create() -> None:
                 <q-btn
                     v-if="props.row.status === 'Uploaded' || props.row.status === 'Completed'"
                     :label="props.row.status === 'Completed' ? 'Edit' : 'Transcribe'"
-                    :color="props.row.status === 'Completed' ? 'white' : 'black'"
-                    :text-color="props.row.status === 'Completed' ? 'black' : 'white'"
-                    :outline="props.row.status === 'Completed'"
+                    :class="props.row.status === 'Completed' ? 'table-btn-edit' : 'table-btn-transcribe'"
                     style="width: 120px; height: 40px;"
                     @click="$parent.$emit('table_handle_row_click', props.row)"
                 />
@@ -182,7 +187,13 @@ def create() -> None:
                 with ui.button("Transcribe", icon="rtt") as bulk_transcribe:
                     bulk_transcribe.props("color=black flat")
                     bulk_transcribe.classes("default-style")
-                    bulk_transcribe.on("click", lambda: table_bulk_transcribe(table, on_complete=lambda: ui.timer(0.1, update_rows, once=True)))
+                    bulk_transcribe.on(
+                        "click",
+                        lambda: table_bulk_transcribe(
+                            table,
+                            on_complete=lambda: ui.timer(0.1, update_rows, once=True),
+                        ),
+                    )
                     bulk_transcribe.set_enabled(False)
                     transcribe_tooltip = ui.tooltip(
                         "Select one or more files to transcribe"
@@ -198,6 +209,11 @@ def create() -> None:
             Update the rows in the table.
             """
             rows = await jobs_get()
+
+            # Backend fetch failed; keep existing rows so table doesn't blank
+            # out during long operations like uploads.
+            if rows is None:
+                return
 
             if not rows:
                 delete.set_enabled(False)

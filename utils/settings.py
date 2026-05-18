@@ -40,11 +40,13 @@ class Settings(BaseSettings):
 
     LOGO_LANDING: str = "sunet_logo.png"
     LOGO_LANDING_WIDTH: str = "250"
-    LOGO_TOPBAR: str = "sunet_small.png"
+    LOGO_TOPBAR_LIGHT: str = "sunet_small.png"
+    LOGO_TOPBAR_DARK: str = "sunet_small_dark.png"
     FAVICON: str = "favicon.ico"
     TAB_TITLE: str = "Sunet Scribe"
     TOPBAR_TEXT: str = "Sunet Scribe"
     LANDING_TEXT: str = "Welcome to Sunet Scribe"
+    MANUAL_URL: str = "https://sunet.box.com/s/la16r5iu3gkm5n149mzmth9yiaulx3ub"
 
     WHISPER_MODELS: list[str] = [
         "Fast transcription (normal accuracy)",
@@ -65,6 +67,7 @@ class Settings(BaseSettings):
         "Russian",
         "Ukrainian",
         "Icelandic",
+        "Northern Sámi (Experimental)",
     ]
 
 

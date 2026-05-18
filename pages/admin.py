@@ -22,18 +22,10 @@ import re
 
 from collections import defaultdict
 from datetime import datetime
-from nicegui import ui
-from utils.common import add_timezone_to_timestamp, default_styles, page_init
-from db.analytics import (
-    get_page_views,
-    get_page_views_summary,
-    get_views_per_day,
-    get_recent_views,
-    get_hourly_heatmap,
-    get_hourly_distribution,
-    get_week_over_week,
-    get_total_stats,
-)
+from nicegui import app, ui
+from utils.common import add_timezone_to_timestamp, page_init
+from utils.styles import default_styles, severity_styles, chart_colors
+from db.analytics import fetch_all as fetch_analytics
 from utils.helpers import (
     groups_get,
     realms_get,
@@ -196,15 +188,6 @@ def edit_group(group_id: str) -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-        </style>
-        """
-    )
 
     try:
         res = httpx.get(
@@ -221,7 +204,7 @@ def edit_group(group_id: str) -> None:
             user["active"] = "Yes" if user.get("active", True) else "No"
 
     except httpx.HTTPError as e:
-        ui.label(f"Error fetching group: {e}").classes("text-lg text-red-500")
+        ui.label(f"Error fetching group: {e}").classes("text-lg").style("color: var(--color-text-danger);")
         return
 
     with ui.row().style(
@@ -315,7 +298,7 @@ def edit_group(group_id: str) -> None:
 
 @ui.refreshable
 @ui.page("/admin/stats/{group_id}")
-def statistics(group_id: str) -> None:
+async def statistics(group_id: str) -> None:
     """
     Page to show statistics of a group with improved layout and design.
     """
@@ -326,63 +309,29 @@ def statistics(group_id: str) -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-            .stats-container {
-                max-width: 1500px;
-                margin: 0 auto;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                gap: 2rem;
-                padding: 2rem 1rem;
-            }
-            .stats-card {
-                width: 100%;
-                background-color: #ffffff;
-                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-                border-radius: 1rem;
-                padding: 1.5rem 2rem;
-                text-align: center;
-            }
-            .stats-card h1 {
-                font-size: 1.8rem;
-                font-weight: 700;
-                margin-bottom: 1rem;
-                color: #111827;
-            }
-            .stats-card p {
-                margin: 0.25rem 0;
-                font-size: 1.1rem;
-                color: #374151;
-            }
-            .chart-container {
-                width: 100%;
-                background-color: #ffffff;
-                border-radius: 1rem;
-                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-                padding: 1.5rem 2rem;
-            }
-            .table-container {
-                width: 100%;
-                background-color: #ffffff;
-                border-radius: 1rem;
-                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-                padding: 1.5rem 2rem;
-            }
-        </style>
-        """
-    )
+
+    # Detect resolved dark mode (handles auto mode with OS preference)
+    dark_pref = app.storage.user.get("dark_mode", None)
+    if dark_pref is None:
+        try:
+            await ui.context.client.connected()
+            prefers_dark = await ui.run_javascript(
+                "window.matchMedia('(prefers-color-scheme: dark)').matches",
+                timeout=5.0,
+            )
+            app.storage.user["_resolved_dark"] = bool(prefers_dark)
+        except (TimeoutError, Exception):
+            pass
+
+    is_dark = app.storage.user.get("_resolved_dark", False)
+    cc = chart_colors["dark" if is_dark else "light"]
 
     stats = user_statistics_get(group_id=group_id)
 
     if not stats or "result" not in stats:
         ui.label("Error fetching statistics.").classes(
-            "text-lg text-red-500 text-center mt-6"
+            "text-lg text-center mt-6"
+        ).style("color: var(--color-text-danger);"
         )
         return
 
@@ -402,19 +351,21 @@ def statistics(group_id: str) -> None:
 
     with ui.element("div").classes("stats-container w-full"):
         with ui.element("div").classes("stats-card w-full"):
-            ui.label(f"Number of users: {total_users}").classes("text-lg text-gray-600")
+            ui.label(f"Number of users: {total_users}").classes(
+                "text-lg text-theme-secondary"
+            )
             ui.label(
                 f"Transcribed files this month: {result.get('transcribed_files', 0)} files"
-            ).classes("text-lg text-gray-600")
+            ).classes("text-lg text-theme-secondary")
             ui.label(
                 f"Transcribed files last month: {result.get('transcribed_files_last_month', 0)} files"
-            ).classes("text-lg text-gray-600")
+            ).classes("text-lg text-theme-secondary")
             ui.label(
                 f"Transcribed minutes this month: {result.get('total_transcribed_minutes', 0):.0f} minutes"
-            ).classes("text-lg text-gray-600")
+            ).classes("text-lg text-theme-secondary")
             ui.label(
                 f"Transcribed minutes last month: {result.get('total_transcribed_minutes_last_month', 0):.0f} minutes"
-            ).classes("text-lg text-gray-600")
+            ).classes("text-lg text-theme-secondary")
 
         if per_day:
             dates = list(per_day.keys())
@@ -425,7 +376,7 @@ def statistics(group_id: str) -> None:
                     go.Bar(
                         x=dates,
                         y=values,
-                        marker=dict(color="#4F46E5", line=dict(width=0)),
+                        marker=dict(color=cc["bar_current"], line=dict(width=0)),
                         hovertemplate="%{x} - %{y:.1f} minutes<extra></extra>",
                     )
                 ]
@@ -434,7 +385,7 @@ def statistics(group_id: str) -> None:
                 title="Transcribed minutes per day (current month)",
                 xaxis_title="Date",
                 yaxis_title="Minutes",
-                template="plotly_white",
+                template="plotly_dark" if is_dark else "plotly_white",
                 margin=dict(l=40, r=20, t=60, b=40),
                 height=400,
             )
@@ -451,7 +402,7 @@ def statistics(group_id: str) -> None:
                     go.Bar(
                         x=dates_prev,
                         y=values_prev,
-                        marker=dict(color="#10B981", line=dict(width=0)),
+                        marker=dict(color=cc["bar_previous"], line=dict(width=0)),
                         hovertemplate="%{x} - %{y:.1f} minutes<extra></extra>",
                     )
                 ]
@@ -460,7 +411,7 @@ def statistics(group_id: str) -> None:
                 title="Transcribed minutes per day (previous month)",
                 xaxis_title="Date",
                 yaxis_title="Minutes",
-                template="plotly_white",
+                template="plotly_dark" if is_dark else "plotly_white",
                 margin=dict(l=40, r=20, t=60, b=40),
                 height=400,
             )
@@ -471,7 +422,7 @@ def statistics(group_id: str) -> None:
         if per_user:
             with ui.element("div").classes("table-container"):
                 ui.label("Transcribed minutes per user this month").classes(
-                    "text-gray-800"
+                    "text-theme-primary"
                 )
                 user_rows = [
                     {"username": username, "minutes": f"{minutes:.1f}"}
@@ -513,7 +464,7 @@ def statistics(group_id: str) -> None:
         if job_queue:
             with ui.element("div").classes("table-container"):
                 ui.label("Job queue for group").classes(
-                    "text-2xl font-bold mb-4 text-gray-800"
+                    "text-2xl font-bold mb-4 text-theme-primary"
                 )
                 queue_columns = [
                     {
@@ -575,15 +526,6 @@ def create() -> None:
             return
 
         ui.add_head_html(default_styles)
-        ui.add_head_html(
-            """
-            <style>
-                body {
-                    background-color: #ffffff;
-                }
-            </style>
-            """
-        )
 
         with ui.row().style(
             "justify-content: space-between; align-items: center; width: 100%;"
@@ -607,7 +549,9 @@ def create() -> None:
                 )
                 return
 
-            with ui.scroll_area().style("height: calc(100vh - 160px - var(--banner-offset, 0px)); width: 100%;"):
+            with ui.scroll_area().style(
+                "height: calc(100vh - 160px - var(--banner-offset, 0px)); width: 100%;"
+            ):
                 groups = sorted(
                     groups,
                     key=lambda x: (
@@ -662,7 +606,9 @@ def create() -> None:
                                     value=False,
                                 )
                                 .classes("text-bold")
-                                .style("width: 100%; background-color: #ffffff;")
+                                .style(
+                                    "width: 100%; background-color: var(--color-bg-surface);"
+                                )
                             )
 
                         if group["name"] == "All users":
@@ -686,15 +632,6 @@ def users() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-        </style>
-        """
-    )
 
     try:
         res = httpx.get(
@@ -708,10 +645,14 @@ def users() -> None:
             user["id"] = index
             user["admin"] = "Yes" if user.get("admin", True) else "No"
             user["active"] = "Yes" if user.get("active", True) else "No"
-            user["provisioning"] = "Manual" if user.get("manually_activated") or user.get("manually_deactivated") else "Auto"
+            user["provisioning"] = (
+                "Manual"
+                if user.get("manually_activated") or user.get("manually_deactivated")
+                else "Auto"
+            )
 
     except httpx.HTTPError as e:
-        ui.label(f"Error fetching users: {e}").classes("text-lg text-red-500")
+        ui.label(f"Error fetching users: {e}").classes("text-lg").style("color: var(--color-text-danger);")
         return
 
     users_table = ui.table(
@@ -819,7 +760,9 @@ def users() -> None:
 
                 dialog.open()
 
-            with ui.button("More").classes("button-close").props("color=black flat icon-right=arrow_drop_down"):
+            with ui.button("More").classes("button-close").props(
+                "color=black flat icon-right=arrow_drop_down"
+            ):
                 with ui.menu():
                     ui.menu_item(
                         "Domains",
@@ -853,7 +796,7 @@ def users() -> None:
 
 
 @ui.page("/health")
-def health() -> None:
+async def health() -> None:
     """
     Health check dashboard displaying backend system metrics.
     """
@@ -865,44 +808,22 @@ def health() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-            .card {
-                background-color: white;
-                border-radius: 1rem;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-                padding: 1.25rem;
-                width: 100%;
-                max-width: 100%;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-            }
-            .status-dot {
-                width: 12px;
-                height: 12px;
-                border-radius: 50%;
-                display: inline-block;
-                margin-right: 6px;
-            }
-            .health-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
-                gap: 1.25rem;
-                width: 100%;
-            }
-            @media (max-width: 768px) {
-                .health-grid {
-                    grid-template-columns: 1fr;
-                }
-            }
-        </style>
-        """
-    )
+
+    # Detect resolved dark mode (handles auto mode with OS preference)
+    dark_pref = app.storage.user.get("dark_mode", None)
+    if dark_pref is None:
+        try:
+            await ui.context.client.connected()
+            prefers_dark = await ui.run_javascript(
+                "window.matchMedia('(prefers-color-scheme: dark)').matches",
+                timeout=5.0,
+            )
+            app.storage.user["_resolved_dark"] = bool(prefers_dark)
+        except (TimeoutError, Exception):
+            pass
+
+    is_dark = app.storage.user.get("_resolved_dark", False)
+    cc = chart_colors["dark" if is_dark else "light"]
 
     ui.label("System status").classes("text-3xl font-bold mb-4")
 
@@ -922,12 +843,12 @@ def health() -> None:
             backend_reachable = False
 
         if not backend_reachable:
-            ui.label("Backend is not reachable").classes("text-lg text-red-500")
+            ui.label("Backend is not reachable").classes("text-lg").style("color: var(--color-text-danger);")
             return
 
         with ui.element("div").classes("health-grid"):
             if not data:
-                ui.label("No workers online.").classes("text-lg text-gray-600")
+                ui.label("No workers online.").classes("text-lg text-theme-secondary")
                 return
 
             for host, samples in data.items():
@@ -961,14 +882,14 @@ def health() -> None:
                     for s in samples
                 ]
 
-                with ui.card().classes("card"):
+                with ui.card().classes("health-card"):
                     with ui.row().classes("items-center justify-between w-full"):
                         ui.label(host).classes("text-lg font-medium")
 
                         status_color = (
-                            "bg-red-500"
+                            "status-dot-offline"
                             if (datetime.now().timestamp() - seen) > 30
-                            else "bg-green-500"
+                            else "status-dot-online"
                         )
                         status = (
                             "Offline"
@@ -983,7 +904,7 @@ def health() -> None:
 
                     ui.label(
                         f"Load Avg: {latest['load_avg']:.1f} | Memory Usage: {latest['memory_usage']:.1f}%"
-                    ).classes("text-sm text-gray-600 mb-2")
+                    ).classes("text-sm text-theme-secondary mb-2")
 
                     fig_cpu = go.Figure()
                     fig_cpu.add_trace(
@@ -992,9 +913,9 @@ def health() -> None:
                             y=load_vals,
                             mode="lines",
                             name="Load Avg",
-                            line=dict(color="#3b82f6", width=2.5, shape="spline"),
+                            line=dict(color=cc["line_cpu"], width=2.5, shape="spline"),
                             fill="tozeroy",
-                            fillcolor="rgba(59, 130, 246, 0.1)",
+                            fillcolor=cc["fill_cpu"],
                             hovertemplate="<b>Load</b>: %{y:.1f}<br><extra></extra>",
                         )
                     )
@@ -1004,9 +925,9 @@ def health() -> None:
                             y=mem_vals,
                             mode="lines",
                             name="Memory %",
-                            line=dict(color="#10b981", width=2.5, shape="spline"),
+                            line=dict(color=cc["line_memory"], width=2.5, shape="spline"),
                             fill="tozeroy",
-                            fillcolor="rgba(16, 185, 129, 0.1)",
+                            fillcolor=cc["fill_memory"],
                             hovertemplate="<b>Memory</b>: %{y:.1f}%<br><extra></extra>",
                         )
                     )
@@ -1021,20 +942,17 @@ def health() -> None:
                             font=dict(size=11),
                         ),
                         height=200,
-                        template="plotly_white",
+                        template="plotly_dark" if is_dark else "plotly_white",
                         xaxis=dict(
                             title="Time",
                             showgrid=True,
-                            gridcolor="rgba(0,0,0,0.05)",
                         ),
                         yaxis=dict(
                             title="%",
                             showgrid=True,
-                            gridcolor="rgba(0,0,0,0.05)",
                             rangemode="tozero",
                         ),
                         font=dict(size=11),
-                        plot_bgcolor="rgba(248, 250, 252, 0.5)",
                         hovermode="x unified",
                     )
                     ui.plotly(fig_cpu).classes("w-full")
@@ -1047,9 +965,9 @@ def health() -> None:
                                 y=gpu_cpu_vals,
                                 mode="lines",
                                 name="GPU Util%",
-                                line=dict(color="#8b5cf6", width=2.5, shape="spline"),
+                                line=dict(color=cc["line_gpu"], width=2.5, shape="spline"),
                                 fill="tozeroy",
-                                fillcolor="rgba(139, 92, 246, 0.1)",
+                                fillcolor=cc["fill_gpu"],
                                 hovertemplate="<b>GPU Util</b>: %{y:.1f}%<br><extra></extra>",
                             )
                         )
@@ -1059,9 +977,9 @@ def health() -> None:
                                 y=gpu_mem_vals,
                                 mode="lines",
                                 name="GPU Mem%",
-                                line=dict(color="#f59e0b", width=2.5, shape="spline"),
+                                line=dict(color=cc["line_gpu_mem"], width=2.5, shape="spline"),
                                 fill="tozeroy",
-                                fillcolor="rgba(245, 158, 11, 0.1)",
+                                fillcolor=cc["fill_gpu_mem"],
                                 hovertemplate="<b>GPU Memory</b>: %{y:.1f}%<br><extra></extra>",
                             )
                         )
@@ -1077,26 +995,23 @@ def health() -> None:
                                 font=dict(size=11),
                             ),
                             height=200,
-                            template="plotly_white",
+                            template="plotly_dark" if is_dark else "plotly_white",
                             xaxis=dict(
                                 title="Time",
                                 showgrid=True,
-                                gridcolor="rgba(0,0,0,0.05)",
                             ),
                             yaxis=dict(
                                 title="%",
                                 showgrid=True,
-                                gridcolor="rgba(0,0,0,0.05)",
                                 rangemode="tozero",
                             ),
                             font=dict(size=11),
-                            plot_bgcolor="rgba(248, 250, 252, 0.5)",
                             hovermode="x unified",
                         )
                         ui.plotly(fig_gpu).classes("w-full")
 
                     ui.label(f"Last updated: {times[-1]} UTC").classes(
-                        "text-xs text-gray-400 mt-1"
+                        "text-xs text-theme-muted mt-1"
                     )
 
     render_health()
@@ -1105,6 +1020,7 @@ def health() -> None:
 
 
 def create_customer_dialog(page: callable) -> None:
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
     realms = _get_valid_realms()
 
     with ui.dialog() as create_customer_dialog:
@@ -1253,15 +1169,6 @@ def edit_customer(customer_id: str) -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-        </style>
-        """
-    )
 
     try:
         res = httpx.get(
@@ -1277,7 +1184,7 @@ def edit_customer(customer_id: str) -> None:
         ]
 
     except httpx.HTTPError as e:
-        ui.label(f"Error fetching customer: {e}").classes("text-lg text-red-500")
+        ui.label(f"Error fetching customer: {e}").classes("text-lg").style("color: var(--color-text-danger);")
         return
 
     ui.label(f"Edit customer: {customer['name']}").classes("text-3xl font-bold mb-4")
@@ -1412,15 +1319,6 @@ def customers() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-        </style>
-        """
-    )
 
     with ui.row().style(
         "justify-content: space-between; align-items: center; width: 100%;"
@@ -1456,7 +1354,9 @@ def customers() -> None:
         )
         return
 
-    with ui.scroll_area().style("height: calc(100vh - 160px - var(--banner-offset, 0px)); width: 100%;"):
+    with ui.scroll_area().style(
+        "height: calc(100vh - 160px - var(--banner-offset, 0px)); width: 100%;"
+    ):
         customers_list = sorted(
             customers_data["result"], key=lambda x: x["name"].lower()
         )
@@ -1503,6 +1403,9 @@ def create_rule_dialog(page: callable) -> None:
     Show a dialog to create a new attribute rule.
     """
 
+    # Re-apply dark mode to prevent state loss during dialog creation
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
+
     onboarding_attrs = attributes_get()
     attr_names = [a["name"] for a in onboarding_attrs]
     all_groups = groups_get()
@@ -1519,7 +1422,9 @@ def create_rule_dialog(page: callable) -> None:
         user_data = get_user_data() or {}
         admin_domains = user_data.get("admin_domains") or ""
         allowed_realms = [
-            d.strip() for d in admin_domains.split(",") if d.strip() and "." in d.strip()
+            d.strip()
+            for d in admin_domains.split(",")
+            if d.strip() and "." in d.strip()
         ]
 
     with ui.dialog() as dialog:
@@ -1590,6 +1495,11 @@ def create_rule_dialog(page: callable) -> None:
                 .props("outlined")
             )
 
+            ui.label("Default personal notifications").classes("text-lg font-semibold mt-2")
+            with ui.row().classes("w-full gap-4"):
+                notify_job_cb = ui.checkbox("Transcription completed")
+                notify_deletion_cb = ui.checkbox("Upcoming file deletions")
+
             with ui.row().style("justify-content: flex-end; width: 100%;"):
                 ui.button("Cancel").classes("button-close").props(
                     "color=black flat"
@@ -1608,6 +1518,8 @@ def create_rule_dialog(page: callable) -> None:
                             activate=activate_cb.value,
                             deny=deny_cb.value,
                             assign_to_group=group_select.value,
+                            notify_job=notify_job_cb.value,
+                            notify_deletion=notify_deletion_cb.value,
                         )
                         and (dialog.close(), ui.navigate.to("/admin/rules"))
                     ),
@@ -1643,6 +1555,8 @@ def _do_create_rule(**kwargs) -> bool:
         "assign_to_group": str(kwargs["assign_to_group"])
         if kwargs["assign_to_group"]
         else None,
+        "notify_job": kwargs.get("notify_job", False),
+        "notify_deletion": kwargs.get("notify_deletion", False),
     }
 
     result = rule_create(data)
@@ -1661,6 +1575,9 @@ def edit_rule_dialog(rule: dict, page: callable) -> None:
     Show a dialog to edit an existing attribute rule.
     """
 
+    # Re-apply dark mode to prevent state loss during dialog creation
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
+
     onboarding_attrs = attributes_get()
     attr_names = [a["name"] for a in onboarding_attrs]
     all_groups = groups_get()
@@ -1677,7 +1594,9 @@ def edit_rule_dialog(rule: dict, page: callable) -> None:
         user_data = get_user_data() or {}
         admin_domains = user_data.get("admin_domains", "")
         allowed_realms = [
-            d.strip() for d in admin_domains.split(",") if d.strip() and "." in d.strip()
+            d.strip()
+            for d in admin_domains.split(",")
+            if d.strip() and "." in d.strip()
         ]
 
     with ui.dialog() as dialog:
@@ -1783,6 +1702,17 @@ def edit_rule_dialog(rule: dict, page: callable) -> None:
                 .props("outlined")
             )
 
+            ui.label("Default personal notifications").classes("text-lg font-semibold mt-2")
+            with ui.row().classes("w-full gap-4"):
+                notify_job_cb = ui.checkbox(
+                    "Transcription completed",
+                    value=rule.get("notify_job", False),
+                )
+                notify_deletion_cb = ui.checkbox(
+                    "Upcoming file deletions",
+                    value=rule.get("notify_deletion", False),
+                )
+
             with ui.row().style("justify-content: flex-end; width: 100%;"):
                 ui.button("Cancel").classes("button-close").props(
                     "color=black flat"
@@ -1800,6 +1730,8 @@ def edit_rule_dialog(rule: dict, page: callable) -> None:
                             activate=activate_cb.value,
                             deny=deny_cb.value,
                             assign_to_group=group_select.value,
+                            notify_job=notify_job_cb.value,
+                            notify_deletion=notify_deletion_cb.value,
                         )
                         and (dialog.close(), ui.navigate.to("/admin/rules"))
                     ),
@@ -1835,6 +1767,8 @@ def _do_update_rule(**kwargs) -> bool:
         "assign_to_group": str(kwargs["assign_to_group"])
         if kwargs["assign_to_group"]
         else None,
+        "notify_job": kwargs.get("notify_job", False),
+        "notify_deletion": kwargs.get("notify_deletion", False),
     }
 
     if rule_update(kwargs["rule_id"], data):
@@ -1850,6 +1784,8 @@ def delete_rule_dialog(rule: dict) -> None:
     """
     Show confirmation dialog to delete a rule.
     """
+
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
 
     with ui.dialog() as dialog:
         with ui.card().style("width: 400px; max-width: 90vw;"):
@@ -1888,6 +1824,7 @@ def add_attribute_dialog() -> None:
     """
     Show a dialog to add a new onboarding attribute.
     """
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
 
     with ui.dialog() as dialog:
         with ui.card().style("width: 450px; max-width: 90vw;"):
@@ -1938,6 +1875,7 @@ def _evaluate_condition(condition: str, actual_value: str, expected_value: str) 
     For list-type attributes (comma-separated), check if any item matches.
     """
 
+    condition = (condition or "").lower()
     values = [v.strip() for v in actual_value.split(",")]
 
     for val in values:
@@ -1970,25 +1908,31 @@ def test_rules_dialog(selected_rules: list[dict]) -> None:
     For list-type values (e.g. affiliations), enter items separated by commas.
     """
 
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
+
     rule = selected_rules[0]
     attr_name = rule.get("attribute_name", "")
     condition = rule.get("attribute_condition", "")
     expected = rule.get("attribute_value", "")
-    cond_label = CONDITION_OPTIONS.get(condition, condition)
+    cond_label = CONDITION_OPTIONS.get(condition.lower(), condition)
 
     with ui.dialog() as dialog, ui.card().style("min-width: 600px; max-width: 800px;"):
         ui.label("Test rule").classes("text-xl font-bold")
-        ui.label(f"{rule.get('name', '')}").classes("text-grey-7")
-        ui.label(
-            f"{attr_name} {cond_label} \"{expected}\""
-        ).classes("text-grey-7 text-sm")
+        ui.label(f"{rule.get('name', '')}").classes("text-theme-muted")
+        ui.label(f'{attr_name} {cond_label} "{expected}"').classes(
+            "text-theme-muted text-sm"
+        )
 
         ui.separator()
 
-        test_input = ui.input(
-            label=f"Value for {attr_name}",
-            placeholder="For lists, separate with commas",
-        ).classes("w-full").on("keydown.enter", lambda: run_test())
+        test_input = (
+            ui.input(
+                label=f"Value for {attr_name}",
+                placeholder="For lists, separate with commas",
+            )
+            .classes("w-full")
+            .on("keydown.enter", lambda: run_test())
+        )
 
         result_container = ui.column().classes("w-full mt-2")
 
@@ -2021,6 +1965,8 @@ def test_all_rules_dialog() -> None:
     simulates provisioning against all enabled rules.
     """
 
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
+
     rules_data = rules_get()
     all_rules = rules_data.get("result", []) if rules_data else []
     enabled_rules = [r for r in all_rules if r.get("enabled")]
@@ -2037,7 +1983,7 @@ def test_all_rules_dialog() -> None:
         ui.label("Simulate provisioning").classes("text-xl font-bold")
         ui.label(
             "Enter attribute values to simulate what would happen when a user logs in."
-        ).classes("text-grey-7")
+        ).classes("text-theme-muted")
 
         ui.separator()
 
@@ -2056,11 +2002,15 @@ def test_all_rules_dialog() -> None:
                         with_input=True,
                         new_value_mode="add",
                     ).classes("w-1/3")
-                    row["value"] = ui.input(
-                        label="Value",
-                        value=value,
-                        placeholder="For lists, separate with commas",
-                    ).classes("flex-grow").on("keydown.enter", lambda: run_test())
+                    row["value"] = (
+                        ui.input(
+                            label="Value",
+                            value=value,
+                            placeholder="For lists, separate with commas",
+                        )
+                        .classes("flex-grow")
+                        .on("keydown.enter", lambda: run_test())
+                    )
                     ui.button(
                         icon="close",
                         on_click=lambda r=row: remove_attr_row(r),
@@ -2075,9 +2025,9 @@ def test_all_rules_dialog() -> None:
 
         add_attr_row()
 
-        ui.button(
-            "Add attribute", icon="add", on_click=lambda: add_attr_row()
-        ).props("flat dense color=primary")
+        ui.button("Add attribute", icon="add", on_click=lambda: add_attr_row()).props(
+            "flat dense color=primary"
+        )
 
         result_container = ui.column().classes("w-full mt-2")
 
@@ -2117,7 +2067,7 @@ def test_all_rules_dialog() -> None:
             with result_container:
                 for rule in matched_rules:
                     cond_label = CONDITION_OPTIONS.get(
-                        rule.get("attribute_condition", ""),
+                        rule.get("attribute_condition", "").lower(),
                         rule.get("attribute_condition", ""),
                     )
                     actions = []
@@ -2135,15 +2085,15 @@ def test_all_rules_dialog() -> None:
                         ui.label(
                             f'{rule.get("attribute_name")} {cond_label} '
                             f'"{rule.get("attribute_value")}"'
-                        ).classes("text-grey-7 text-sm")
+                        ).classes("text-theme-muted text-sm")
                     if actions:
-                        ui.label(
-                            f"Actions: {', '.join(actions)}"
-                        ).classes("text-body2 text-grey-8 ml-8")
+                        ui.label(f"Actions: {', '.join(actions)}").classes(
+                            "text-body2 text-theme-secondary ml-8"
+                        )
 
                 for rule in unmatched_rules:
                     cond_label = CONDITION_OPTIONS.get(
-                        rule.get("attribute_condition", ""),
+                        rule.get("attribute_condition", "").lower(),
                         rule.get("attribute_condition", ""),
                     )
                     with ui.row().classes("items-center gap-2"):
@@ -2152,16 +2102,16 @@ def test_all_rules_dialog() -> None:
                         ui.label(
                             f'{rule.get("attribute_name")} {cond_label} '
                             f'"{rule.get("attribute_value")}"'
-                        ).classes("text-grey-7 text-sm")
+                        ).classes("text-theme-muted text-sm")
 
                 if not matched_rules and not unmatched_rules:
-                    ui.label("No enabled rules to test.").classes("text-grey-7")
+                    ui.label("No enabled rules to test.").classes("text-theme-muted")
 
                 # Final provisioning result summary
                 ui.separator().classes("my-2")
                 ui.label("Simulated result").classes("font-bold")
                 if not matched_rules:
-                    ui.label("None").classes("text-grey-7")
+                    ui.label("None").classes("text-theme-muted")
                 else:
                     will_activate = any(r.get("activate") for r in matched_rules)
                     will_deny = any(r.get("deny") for r in matched_rules)
@@ -2188,7 +2138,7 @@ def test_all_rules_dialog() -> None:
                         for r in results:
                             ui.label(r)
                     else:
-                        ui.label("None").classes("text-grey-7")
+                        ui.label("None").classes("text-theme-muted")
 
         with ui.row().classes("w-full justify-end mt-4 gap-2"):
             ui.button("Simulate", icon="science", on_click=run_test).props(
@@ -2226,7 +2176,7 @@ def _show_rules_help() -> None:
                     "equals, contains or starts with), and a value to compare against. "
                     "If the condition matches the user's attribute value, the rule's "
                     "actions are applied."
-                ).classes("text-body2 text-grey-8")
+                ).classes("text-body2 text-theme-secondary")
 
             with ui.column().classes("gap-1"):
                 ui.label("Available actions").classes("text-lg font-semibold")
@@ -2243,7 +2193,9 @@ def _show_rules_help() -> None:
                             ui.label(f"• {action}").classes(
                                 "text-body2 font-medium"
                             ).style("min-width: 140px;")
-                            ui.label(f"— {desc}").classes("text-body2 text-grey-8")
+                            ui.label(f"— {desc}").classes(
+                                "text-body2 text-theme-secondary"
+                            )
 
             with ui.column().classes("gap-1"):
                 ui.label("Scoping").classes("text-lg font-semibold")
@@ -2251,21 +2203,21 @@ def _show_rules_help() -> None:
                     "The Realm field limits which login domains the rule applies to. "
                     "Local administrators can only create rules for the realms "
                     "assigned to their account."
-                ).classes("text-body2 text-grey-8")
+                ).classes("text-body2 text-theme-secondary")
 
             with ui.column().classes("gap-1"):
                 ui.label("Rule evaluation").classes("text-lg font-semibold")
                 ui.label(
                     "All enabled rules are evaluated on every login. "
                     "If rules conflict:"
-                ).classes("text-body2 text-grey-8")
+                ).classes("text-body2 text-theme-secondary")
                 with ui.column().classes("gap-0 pl-2"):
                     for line in [
                         "Deactivate always wins over Activate.",
                         "For group assignment, the last matching rule wins. "
                         "A user can only belong to one group.",
                     ]:
-                        ui.label(f"• {line}").classes("text-body2 text-grey-8")
+                        ui.label(f"• {line}").classes("text-body2 text-theme-secondary")
 
             with ui.column().classes("gap-1"):
                 ui.label("Manual override").classes("text-lg font-semibold")
@@ -2275,7 +2227,7 @@ def _show_rules_help() -> None:
                     "override that decision. "
                     "The user will remain deactivated until an administrator "
                     "reactivates the account."
-                ).classes("text-body2 text-grey-8")
+                ).classes("text-body2 text-theme-secondary")
 
             with ui.column().classes("gap-1"):
                 ui.label("Testing").classes("text-lg font-semibold")
@@ -2285,7 +2237,7 @@ def _show_rules_help() -> None:
                     "rule's attribute and condition. "
                     "For list-type attributes (for example affiliations), enter "
                     "multiple values separated by commas."
-                ).classes("text-body2 text-grey-8")
+                ).classes("text-body2 text-theme-secondary")
 
         with ui.row().classes("w-full justify-end mt-4"):
             ui.button("Close", on_click=dialog.close).props("flat")
@@ -2306,15 +2258,6 @@ def rules_page() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html(
-        """
-        <style>
-            body {
-                background-color: #ffffff;
-            }
-        </style>
-        """
-    )
 
     with ui.row().style(
         "justify-content: space-between; align-items: center; width: 100%;"
@@ -2325,11 +2268,9 @@ def rules_page() -> None:
                 "click", lambda: _show_rules_help()
             )
         with ui.element("div").style("display: flex; gap: 10px;"):
-            ui.button("Simulate provisioning").classes(
-                "default-style"
-            ).props("color=black flat").style("min-width: 160px; background-color: white;").on(
-                "click", lambda: test_all_rules_dialog()
-            )
+            ui.button("Simulate provisioning").classes("button-close").props(
+                "color=black flat bordered"
+            ).style("width: 200px;").on("click", lambda: test_all_rules_dialog())
             ui.button("Add rule").classes("default-style").props(
                 "color=black flat"
             ).style("min-width: 160px;").on(
@@ -2340,7 +2281,7 @@ def rules_page() -> None:
         "Rules are evaluated on every login. "
         "Deactivate overrides Activate. "
         "The last matching rule determines the user's group."
-    ).classes("text-body2 text-black")
+    ).classes("text-body2")
 
     rules_data = rules_get()
     rules_list = rules_data.get("result", []) if rules_data else []
@@ -2362,70 +2303,74 @@ def rules_page() -> None:
             rule["actions_summary"] = ", ".join(actions) if actions else "None"
             rule["enabled_label"] = "Yes" if rule.get("enabled") else "No"
             cond = rule.get("attribute_condition", "")
-            rule["condition_label"] = CONDITION_OPTIONS.get(cond, cond)
+            rule["condition_label"] = CONDITION_OPTIONS.get(cond.lower(), cond)
 
-        rules_table = ui.table(
-            columns=[
-                {
-                    "name": "name",
-                    "label": "Name",
-                    "field": "name",
-                    "align": "left",
-                    "sortable": True,
-                },
-                {
-                    "name": "attribute_name",
-                    "label": "Attribute",
-                    "field": "attribute_name",
-                    "align": "left",
-                    "sortable": True,
-                },
-                {
-                    "name": "condition_label",
-                    "label": "Condition",
-                    "field": "condition_label",
-                    "align": "left",
-                    "sortable": True,
-                },
-                {
-                    "name": "attribute_value",
-                    "label": "Value",
-                    "field": "attribute_value",
-                    "align": "left",
-                    "sortable": True,
-                },
-                {
-                    "name": "actions_summary",
-                    "label": "Actions",
-                    "field": "actions_summary",
-                    "align": "left",
-                },
-                {
-                    "name": "enabled_label",
-                    "label": "Enabled",
-                    "field": "enabled_label",
-                    "align": "left",
-                    "sortable": True,
-                },
-                {
-                    "name": "realm",
-                    "label": "Realm",
-                    "field": "realm",
-                    "align": "left",
-                    "sortable": True,
-                },
-                {
-                    "name": "row_actions",
-                    "label": "",
-                    "field": "row_actions",
-                    "align": "right",
-                    "sortable": False,
-                },
-            ],
-            rows=rules_list,
-            row_key="id",
-            pagination=20,
-        ).style("width: 100%; box-shadow: none; font-size: 18px;")
+        rules_table = (
+            ui.table(
+                columns=[
+                    {
+                        "name": "name",
+                        "label": "Name",
+                        "field": "name",
+                        "align": "left",
+                        "sortable": True,
+                    },
+                    {
+                        "name": "attribute_name",
+                        "label": "Attribute",
+                        "field": "attribute_name",
+                        "align": "left",
+                        "sortable": True,
+                    },
+                    {
+                        "name": "condition_label",
+                        "label": "Condition",
+                        "field": "condition_label",
+                        "align": "left",
+                        "sortable": True,
+                    },
+                    {
+                        "name": "attribute_value",
+                        "label": "Value",
+                        "field": "attribute_value",
+                        "align": "left",
+                        "sortable": True,
+                    },
+                    {
+                        "name": "actions_summary",
+                        "label": "Actions",
+                        "field": "actions_summary",
+                        "align": "left",
+                    },
+                    {
+                        "name": "enabled_label",
+                        "label": "Enabled",
+                        "field": "enabled_label",
+                        "align": "left",
+                        "sortable": True,
+                    },
+                    {
+                        "name": "realm",
+                        "label": "Realm",
+                        "field": "realm",
+                        "align": "left",
+                        "sortable": True,
+                    },
+                    {
+                        "name": "row_actions",
+                        "label": "",
+                        "field": "row_actions",
+                        "align": "right",
+                        "sortable": False,
+                    },
+                ],
+                rows=rules_list,
+                row_key="id",
+                pagination=20,
+            )
+            .style("width: 100%; box-shadow: none; font-size: 18px;")
+            .classes("table-style")
+        )
 
         with rules_table.add_slot("top-right"):
             with ui.input(placeholder="Search").props("type=search").bind_value(
@@ -2441,6 +2386,7 @@ def rules_page() -> None:
                     :model-value="props.row.enabled"
                     @update:model-value="val => $parent.$emit('toggle_enabled', {id: props.row.id, enabled: val})"
                     color="positive"
+                    :dark="$q.dark.isActive"
                     dense
                 />
             </q-td>
@@ -2486,15 +2432,17 @@ def rules_page() -> None:
             "body-cell-row_actions",
             r"""
             <q-td :props="props">
-                <q-btn flat dense round icon="science" color="primary" size="sm"
+                <q-btn flat dense icon="science" size="sm"
+                    style="width: 80px;"
+                    label="Test"
                     @click="$parent.$emit('test_rule', props.row)"
                 >
-                    <q-tooltip>Test rule</q-tooltip>
                 </q-btn>
-                <q-btn flat dense round icon="delete" color="negative" size="sm"
+                <q-btn flat dense icon="delete" size="sm"
+                    style="width: 80px;"
+                    label="Delete"
                     @click="$parent.$emit('delete_rule', props.row)"
                 >
-                    <q-tooltip>Delete rule</q-tooltip>
                 </q-btn>
             </q-td>
             """,
@@ -2521,7 +2469,7 @@ def rules_page() -> None:
 
         ui.label(
             "These are the known attribute names available when creating rules."
-        ).classes("text-body2 text-grey-7 mb-2")
+        ).classes("text-body2 text-theme-muted mb-2")
 
         attrs = attributes_get()
         if not attrs:
@@ -2600,48 +2548,27 @@ SEVERITY_OPTIONS = {
     "major_incident": "Major incident",
 }
 
-SEVERITY_STYLES = {
-    "info": {
-        "bg": "#e3f2fd",
-        "border": "#90caf9",
-        "icon": "campaign",
-        "icon_color": "#1565c0",
-        "dismissible": True,
-    },
-    "maintenance": {
-        "bg": "#fff3e0",
-        "border": "#ffb74d",
-        "icon": "construction",
-        "icon_color": "#e65100",
-        "dismissible": True,
-    },
-    "major_incident": {
-        "bg": "#fce4ec",
-        "border": "#ef9a9a",
-        "icon": "crisis_alert",
-        "icon_color": "#c62828",
-        "dismissible": False,
-    },
-}
-
 
 def _announcement_preview_dialog(message: str, severity: str = "info") -> None:
     """Show a preview of how the announcement banner will look."""
 
-    style = SEVERITY_STYLES.get(severity, SEVERITY_STYLES["info"])
+    style = severity_styles.get(severity, severity_styles["info"])
 
     with ui.dialog() as preview_dialog:
         with ui.card().style("width: 700px; max-width: 90vw; padding: 24px;"):
             ui.label("Banner preview").classes("text-h6 font-bold mb-4")
-            with ui.element("div").classes("announcement-banner").style(
-                f"background-color: {style['bg']}; border: 1px solid {style['border']};"
-                " border-radius: 4px; padding: 10px 20px; display: flex;"
+            with ui.element("div").classes(
+                f"announcement-banner {style['css_class']}"
+            ).style(
+                "border-radius: 4px; padding: 10px 20px; display: flex;"
                 " align-items: center; gap: 10px; width: 100%;"
             ):
                 ui.icon(style["icon"], size="sm").style(
                     f"color: {style['icon_color']};"
                 )
-                ui.html(message, sanitize=False).style("color: #000000; font-size: 0.95rem;")
+                ui.html(message, sanitize=False).style(
+                    "color: var(--color-text-primary); font-size: 0.95rem;"
+                )
                 if style["dismissible"]:
                     ui.button(icon="close").props(
                         "flat round dense size=sm color=grey-7 disable"
@@ -2656,6 +2583,8 @@ def _announcement_preview_dialog(message: str, severity: str = "info") -> None:
 def _announcement_create_dialog() -> None:
     """Show dialog to create a new announcement."""
 
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
+
     with ui.dialog() as dialog:
         with ui.card().style("width: 600px; max-width: 90vw; padding: 24px;"):
             ui.label("Create announcement").classes("text-h6 font-bold mb-2")
@@ -2663,20 +2592,26 @@ def _announcement_create_dialog() -> None:
             ui.label(
                 "The message supports HTML links, e.g. "
                 '<a href="https://example.com">click here</a>'
-            ).classes("text-body2 text-grey-7 mb-2")
+            ).classes("text-body2 text-theme-muted mb-2")
 
             message_input = ui.textarea("Message").classes("w-full").props("outlined")
 
-            severity_select = ui.select(
-                options=SEVERITY_OPTIONS,
-                label="Severity",
-                value="info",
-            ).classes("w-full").props("outlined")
+            severity_select = (
+                ui.select(
+                    options=SEVERITY_OPTIONS,
+                    label="Severity",
+                    value="info",
+                )
+                .classes("w-full")
+                .props("outlined")
+            )
 
             with ui.row().classes("w-full gap-4"):
-                starts_input = ui.input("Start date/time (optional)").classes(
-                    "flex-1"
-                ).props("outlined")
+                starts_input = (
+                    ui.input("Start date/time (optional)")
+                    .classes("flex-1")
+                    .props("outlined clearable")
+                )
                 with starts_input:
                     with ui.menu().props("no-parent-event") as starts_menu:
                         with ui.date().bind_value(starts_input).on(
@@ -2688,9 +2623,11 @@ def _announcement_create_dialog() -> None:
                             "cursor-pointer"
                         )
 
-                ends_input = ui.input("End date/time (optional)").classes(
-                    "flex-1"
-                ).props("outlined")
+                ends_input = (
+                    ui.input("End date/time (optional)")
+                    .classes("flex-1")
+                    .props("outlined clearable")
+                )
                 with ends_input:
                     with ui.menu().props("no-parent-event") as ends_menu:
                         with ui.date().bind_value(ends_input).on(
@@ -2704,7 +2641,7 @@ def _announcement_create_dialog() -> None:
 
             ui.label(
                 "Leave dates empty for no time restriction. All times are in server time."
-            ).classes("text-body2 text-grey-7")
+            ).classes("text-body2 text-theme-muted")
 
             enabled_switch = ui.switch("Enabled", value=True)
 
@@ -2729,8 +2666,8 @@ def _announcement_create_dialog() -> None:
                                 {
                                     "message": message_input.value.strip(),
                                     "severity": severity_select.value,
-                                    "starts_at": starts_input.value or None,
-                                    "ends_at": ends_input.value or None,
+                                    "starts_at": starts_input.value or "",
+                                    "ends_at": ends_input.value or "",
                                     "enabled": enabled_switch.value,
                                 }
                             )
@@ -2747,6 +2684,8 @@ def _announcement_create_dialog() -> None:
 def _announcement_edit_dialog(ann: dict) -> None:
     """Show dialog to edit an existing announcement."""
 
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
+
     with ui.dialog() as dialog:
         with ui.card().style("width: 600px; max-width: 90vw; padding: 24px;"):
             ui.label("Edit announcement").classes("text-h6 font-bold mb-2")
@@ -2754,25 +2693,39 @@ def _announcement_edit_dialog(ann: dict) -> None:
             ui.label(
                 "The message supports HTML links, e.g. "
                 '<a href="https://example.com">click here</a>'
-            ).classes("text-body2 text-grey-7 mb-2")
+            ).classes("text-body2 text-theme-muted mb-2")
 
-            message_input = ui.textarea("Message", value=ann.get("message", "")).classes(
-                "w-full"
-            ).props("outlined")
+            message_input = (
+                ui.textarea("Message", value=ann.get("message", ""))
+                .classes("w-full")
+                .props("outlined")
+            )
 
-            severity_select = ui.select(
-                options=SEVERITY_OPTIONS,
-                label="Severity",
-                value=ann.get("severity", "info"),
-            ).classes("w-full").props("outlined")
+            severity_select = (
+                ui.select(
+                    options=SEVERITY_OPTIONS,
+                    label="Severity",
+                    value=ann.get("severity", "info"),
+                )
+                .classes("w-full")
+                .props("outlined")
+            )
 
-            starts_val = (ann.get("starts_at") or "").split(" ")[0] if ann.get("starts_at") else ""
-            ends_val = (ann.get("ends_at") or "").split(" ")[0] if ann.get("ends_at") else ""
+            starts_val = (
+                (ann.get("starts_at") or "").split(" ")[0]
+                if ann.get("starts_at")
+                else ""
+            )
+            ends_val = (
+                (ann.get("ends_at") or "").split(" ")[0] if ann.get("ends_at") else ""
+            )
 
             with ui.row().classes("w-full gap-4"):
-                starts_input = ui.input(
-                    "Start date/time (optional)", value=starts_val
-                ).classes("flex-1").props("outlined")
+                starts_input = (
+                    ui.input("Start date/time (optional)", value=starts_val)
+                    .classes("flex-1")
+                    .props("outlined clearable")
+                )
                 with starts_input:
                     with ui.menu().props("no-parent-event") as starts_menu:
                         with ui.date().bind_value(starts_input):
@@ -2782,9 +2735,11 @@ def _announcement_edit_dialog(ann: dict) -> None:
                             "cursor-pointer"
                         )
 
-                ends_input = ui.input(
-                    "End date/time (optional)", value=ends_val
-                ).classes("flex-1").props("outlined")
+                ends_input = (
+                    ui.input("End date/time (optional)", value=ends_val)
+                    .classes("flex-1")
+                    .props("outlined clearable")
+                )
                 with ends_input:
                     with ui.menu().props("no-parent-event") as ends_menu:
                         with ui.date().bind_value(ends_input):
@@ -2796,7 +2751,7 @@ def _announcement_edit_dialog(ann: dict) -> None:
 
             ui.label(
                 "Leave dates empty for no time restriction. All times are in server time."
-            ).classes("text-body2 text-grey-7")
+            ).classes("text-body2 text-theme-muted")
 
             enabled_switch = ui.switch("Enabled", value=ann.get("enabled", True))
 
@@ -2822,8 +2777,8 @@ def _announcement_edit_dialog(ann: dict) -> None:
                                 {
                                     "message": message_input.value.strip(),
                                     "severity": severity_select.value,
-                                    "starts_at": starts_input.value or None,
-                                    "ends_at": ends_input.value or None,
+                                    "starts_at": starts_input.value or "",
+                                    "ends_at": ends_input.value or "",
                                     "enabled": enabled_switch.value,
                                 },
                             )
@@ -2839,6 +2794,8 @@ def _announcement_edit_dialog(ann: dict) -> None:
 
 def _announcement_delete_confirm(ann: dict) -> None:
     """Show confirmation dialog before deleting an announcement."""
+
+    ui.dark_mode(app.storage.user.get("dark_mode", None))
 
     with ui.dialog() as dialog:
         with ui.card().style("width: 400px; max-width: 90vw; padding: 24px;"):
@@ -2875,7 +2832,6 @@ def announcements_page() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html("<style>body { background-color: #ffffff; }</style>")
 
     with ui.row().style(
         "justify-content: space-between; align-items: center; width: 100%;"
@@ -2888,7 +2844,7 @@ def announcements_page() -> None:
     ui.label(
         "Manage announcement banners shown to all users. "
         "All times are in server time."
-    ).classes("text-body2 text-black mb-4")
+    ).classes("text-body2 mb-4")
 
     ann_list = announcements_get()
 
@@ -2909,56 +2865,60 @@ def announcements_page() -> None:
             announcement_update(ann_row["id"], {"enabled": new_val})
             ui.navigate.to("/admin/announcements")
 
-        ann_table = ui.table(
-            columns=[
-                {
-                    "name": "message_short",
-                    "label": "Message",
-                    "field": "message_short",
-                    "align": "left",
-                    "classes": "text-weight-medium",
-                    "style": "max-width: 350px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
-                },
-                {
-                    "name": "severity_label",
-                    "label": "Severity",
-                    "field": "severity_label",
-                    "align": "left",
-                },
-                {
-                    "name": "starts_label",
-                    "label": "Starts",
-                    "field": "starts_label",
-                    "align": "left",
-                },
-                {
-                    "name": "ends_label",
-                    "label": "Ends",
-                    "field": "ends_label",
-                    "align": "left",
-                },
-                {
-                    "name": "enabled",
-                    "label": "Enabled",
-                    "field": "enabled",
-                    "align": "center",
-                },
-                {
-                    "name": "created_by",
-                    "label": "Created by",
-                    "field": "created_by",
-                    "align": "left",
-                },
-                {
-                    "name": "actions",
-                    "label": "Actions",
-                    "field": "actions",
-                    "align": "center",
-                },
-            ],
-            rows=ann_list,
-            row_key="id",
-        ).classes("w-full").props("flat bordered")
+        ann_table = (
+            ui.table(
+                columns=[
+                    {
+                        "name": "message_short",
+                        "label": "Message",
+                        "field": "message_short",
+                        "align": "left",
+                        "classes": "text-weight-medium",
+                        "style": "max-width: 350px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
+                    },
+                    {
+                        "name": "severity_label",
+                        "label": "Severity",
+                        "field": "severity_label",
+                        "align": "left",
+                    },
+                    {
+                        "name": "starts_label",
+                        "label": "Starts",
+                        "field": "starts_label",
+                        "align": "left",
+                    },
+                    {
+                        "name": "ends_label",
+                        "label": "Ends",
+                        "field": "ends_label",
+                        "align": "left",
+                    },
+                    {
+                        "name": "enabled",
+                        "label": "Enabled",
+                        "field": "enabled",
+                        "align": "center",
+                    },
+                    {
+                        "name": "created_by",
+                        "label": "Created by",
+                        "field": "created_by",
+                        "align": "left",
+                    },
+                    {
+                        "name": "actions",
+                        "label": "Actions",
+                        "field": "actions",
+                        "align": "center",
+                    },
+                ],
+                rows=ann_list,
+                row_key="id",
+            )
+            .classes("w-full")
+            .props("flat bordered")
+        )
 
         ann_table.add_slot(
             "body-cell-message_short",
@@ -2982,7 +2942,8 @@ def announcements_page() -> None:
                 <q-toggle
                     :model-value="props.row.enabled"
                     @update:model-value="$parent.$emit('toggle_enabled', props.row)"
-                    color="black"
+                    color="positive"
+                    :dark="$q.dark.isActive"
                 />
             </q-td>
             """,
@@ -3012,7 +2973,7 @@ def announcements_page() -> None:
 
 
 @ui.page("/admin/analytics")
-def analytics() -> None:
+async def analytics() -> None:
     """
     Page view analytics dashboard. BOFH only.
     """
@@ -3024,22 +2985,70 @@ def analytics() -> None:
         return
 
     ui.add_head_html(default_styles)
-    ui.add_head_html("<style>body { background-color: #ffffff; }</style>")
+
+    # Detect resolved dark mode (handles auto mode with OS preference)
+    dark_pref = app.storage.user.get("dark_mode", None)
+    if dark_pref is None:
+        try:
+            await ui.context.client.connected()
+            prefers_dark = await ui.run_javascript(
+                "window.matchMedia('(prefers-color-scheme: dark)').matches",
+                timeout=5.0,
+            )
+            is_dark = bool(prefers_dark)
+            app.storage.user["_resolved_dark"] = is_dark
+        except (TimeoutError, Exception):
+            is_dark = app.storage.user.get("_resolved_dark", False)
+    else:
+        is_dark = bool(dark_pref)
+
+    cc = chart_colors["dark" if is_dark else "light"]
 
     ui.label("Activity overview").classes("text-3xl font-bold mb-4")
 
-    stats = get_total_stats()
-    wow = get_week_over_week()
+    plotly_template = "plotly_dark" if is_dark else "plotly_white"
+
+    # Calculate UTC offset for the user's timezone
+    import pytz
+
+    user_tz_name = app.storage.user.get("timezone", "UTC")
+    try:
+        user_tz = pytz.timezone(user_tz_name)
+        utc_offset_hours = int(
+            datetime.now(user_tz).utcoffset().total_seconds() // 3600
+        )
+    except Exception:
+        utc_offset_hours = 0
+
+    def shift_hour(h: int) -> int:
+        return (h + utc_offset_hours) % 24
+
+    def shift_dow(dow: int, h: int) -> int:
+        """Shift day-of-week if hour wraps past midnight."""
+        shifted = h + utc_offset_hours
+        if shifted >= 24:
+            return (dow % 7) + 1  # next day (PostgreSQL dow: 0=Sun..6=Sat)
+        elif shifted < 0:
+            return (dow - 2) % 7  # previous day
+        return dow
+
+    data = await fetch_analytics(days=30, recent_limit=50)
+    stats = data["stats"]
+    wow = data["wow"]
+    summary = data["summary"]
+    heatmap_data = data["heatmap"]
+    hourly = data["hourly"]
+    page_views = data["page_views"]
+    daily = data["daily"]
+    recent = data["recent"]
 
     if wow["change_pct"] is not None:
         sign = "+" if wow["change_pct"] >= 0 else ""
-        wow_color = "#2e7d32" if wow["change_pct"] >= 0 else "#c62828"
+        wow_color = cc["wow_positive"] if wow["change_pct"] >= 0 else cc["wow_negative"]
         wow_display = f'{sign}{wow["change_pct"]}%'
     else:
-        wow_color = "#757575"
+        wow_color = cc["wow_neutral"]
         wow_display = "N/A"
-
-    summary = get_page_views_summary()
 
     action_summary = [r for r in summary if r["path"].startswith("/action/")]
     action_labels = {
@@ -3067,10 +3076,9 @@ def analytics() -> None:
     # Peak hours heatmap + hourly distribution
     with ui.row().classes("w-full gap-4 q-mt-lg"):
         with ui.card().classes("flex-1 p-4").style("min-width: 400px;"):
-            ui.label("Peak hours (last 30 days)").classes(
+            ui.label(f"Peak hours (last 30 days, {user_tz_name})").classes(
                 "text-h6 font-semibold q-mb-md"
             )
-            heatmap_data = get_hourly_heatmap(days=30)
 
             if heatmap_data:
                 day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -3078,9 +3086,10 @@ def analytics() -> None:
                 # Build a 7x24 matrix (rows=days, cols=hours)
                 matrix = [[0] * 24 for _ in range(7)]
                 for r in heatmap_data:
+                    adj_dow = shift_dow(r["dow"], r["hour"])
                     # PostgreSQL dow: 0=Sun, 1=Mon..6=Sat -> remap to Mon=0..Sun=6
-                    day_idx = (r["dow"] - 1) % 7
-                    matrix[day_idx][r["hour"]] = r["views"]
+                    day_idx = (adj_dow - 1) % 7
+                    matrix[day_idx][shift_hour(r["hour"])] += r["views"]
 
                 fig = go.Figure(
                     data=go.Heatmap(
@@ -3088,8 +3097,8 @@ def analytics() -> None:
                         x=[f"{h:02d}:00" for h in hours],
                         y=day_names,
                         colorscale=[
-                            [0, "#f5f5f5"],
-                            [0.25, "#bbdefb"],
+                            [0, cc["heatmap_zero"]],
+                            [0.25, cc["heatmap_low"]],
                             [0.5, "#42a5f5"],
                             [0.75, "#1565c0"],
                             [1, "#0d47a1"],
@@ -3104,7 +3113,7 @@ def analytics() -> None:
                     )
                 )
                 fig.update_layout(
-                    template="plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=50, r=20, t=20, b=40),
                     xaxis_title="Hour of Day",
@@ -3115,14 +3124,16 @@ def analytics() -> None:
                 ui.label("No data yet.").classes("text-grey-6")
 
         with ui.card().classes("flex-1 p-4").style("min-width: 400px;"):
-            ui.label("Hourly distribution (last 30 days)").classes(
+            ui.label(f"Hourly distribution (last 30 days, {user_tz_name})").classes(
                 "text-h6 font-semibold q-mb-md"
             )
-            hourly = get_hourly_distribution(days=30)
 
             if hourly:
-                # Fill missing hours with 0
-                hourly_map = {r["hour"]: r["views"] for r in hourly}
+                # Shift UTC hours to user timezone and fill missing with 0
+                hourly_map = {}
+                for r in hourly:
+                    shifted = shift_hour(r["hour"])
+                    hourly_map[shifted] = hourly_map.get(shifted, 0) + r["views"]
                 all_hours = list(range(24))
                 all_views = [hourly_map.get(h, 0) for h in all_hours]
 
@@ -3131,13 +3142,13 @@ def analytics() -> None:
                     go.Bar(
                         x=[f"{h:02d}:00" for h in all_hours],
                         y=all_views,
-                        marker_color="#1565c0",
+                        marker_color=cc["hourly_bar"],
                     )
                 )
                 fig.update_layout(
                     xaxis_title="Hour of Day",
                     yaxis_title="Views",
-                    template="plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3152,7 +3163,6 @@ def analytics() -> None:
             ui.label("Page views per day (last 30 days)").classes(
                 "text-h6 font-semibold q-mb-md"
             )
-            page_views = get_page_views(days=30)
 
             if page_views:
                 by_path = defaultdict(lambda: {"dates": [], "views": []})
@@ -3173,7 +3183,7 @@ def analytics() -> None:
                 fig.update_layout(
                     xaxis_title="Date",
                     yaxis_title="Views",
-                    template="plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3191,7 +3201,7 @@ def analytics() -> None:
                         x=[r["path"] for r in summary],
                         y=[r["total_views"] for r in summary],
                         name="All Time",
-                        marker_color="#082954",
+                        marker_color=cc["bar_primary"],
                     )
                 )
                 fig.add_trace(
@@ -3199,14 +3209,14 @@ def analytics() -> None:
                         x=[r["path"] for r in summary],
                         y=[r["views_30d"] for r in summary],
                         name="Last 30 Days",
-                        marker_color="#4caf50",
+                        marker_color=cc["bar_secondary"],
                     )
                 )
                 fig.update_layout(
                     barmode="group",
                     xaxis_title="Page",
                     yaxis_title="Views",
-                    template="plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3220,7 +3230,6 @@ def analytics() -> None:
             ui.label("Total traffic per day (last 30 days)").classes(
                 "text-h6 font-semibold q-mb-md"
             )
-            daily = get_views_per_day(days=30)
 
             if daily:
                 fig = go.Figure()
@@ -3228,13 +3237,13 @@ def analytics() -> None:
                     go.Bar(
                         x=[r["date"] for r in daily],
                         y=[r["views"] for r in daily],
-                        marker_color="#082954",
+                        marker_color=cc["bar_primary"],
                     )
                 )
                 fig.update_layout(
                     xaxis_title="Date",
                     yaxis_title="Page Views",
-                    template="plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3244,7 +3253,6 @@ def analytics() -> None:
 
         with ui.card().classes("flex-1 p-4").style("min-width: 400px;"):
             ui.label("Last visited pages").classes("text-h6 font-semibold q-mb-md")
-            recent = get_recent_views(limit=50)
 
             if recent:
                 columns = [
@@ -3273,7 +3281,7 @@ def analytics() -> None:
                 "text-h6 font-semibold q-mb-md"
             )
             action_views = [
-                r for r in get_page_views(days=30) if r["path"].startswith("/action/")
+                r for r in page_views if r["path"].startswith("/action/")
             ]
 
             if action_views:
@@ -3296,7 +3304,7 @@ def analytics() -> None:
                     barmode="stack",
                     xaxis_title="Date",
                     yaxis_title="Count",
-                    template="plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )
@@ -3317,7 +3325,7 @@ def analytics() -> None:
                         x=action_names,
                         y=[r["total_views"] for r in action_summary],
                         name="All Time",
-                        marker_color="#082954",
+                        marker_color=cc["bar_primary"],
                     )
                 )
                 fig.add_trace(
@@ -3325,14 +3333,14 @@ def analytics() -> None:
                         x=action_names,
                         y=[r["views_30d"] for r in action_summary],
                         name="Last 30 Days",
-                        marker_color="#4caf50",
+                        marker_color=cc["bar_secondary"],
                     )
                 )
                 fig.update_layout(
                     barmode="group",
                     xaxis_title="Action",
                     yaxis_title="Count",
-                    template="plotly_white",
+                    template=plotly_template,
                     height=350,
                     margin=dict(l=40, r=20, t=20, b=40),
                 )

@@ -15,15 +15,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import httpx
 import json
 import re
-import httpx
 
 from nicegui import events, ui
 from typing import Callable, List, Optional
 from utils.caption import SRTCaption
-from utils.common import default_styles, get_auth_header, sanitize_filename
+from utils.common import get_auth_header
+from utils.helpers import sanitize_filename
 from utils.settings import get_settings
+from utils.styles import default_styles
 from utils.undo_redo import UndoRedoManager
 
 CHARACTER_LIMIT_EXCEEDED_COLOR = "text-red"
@@ -250,14 +252,16 @@ class SRTEditor:
         with ui.row().classes("gap-2"):
             self.undo_button = (
                 ui.button("Undo", icon="undo")
-                .props("flat dense color=grey")
+                .props("flat")
+                .classes("editor-btn editor-toolbar-btn")
                 .on("click", self.undo)
             )
             self.undo_button.disable()
 
             self.redo_button = (
                 ui.button("Redo", icon="redo")
-                .props("flat dense color=grey")
+                .props("flat")
+                .classes("editor-btn editor-toolbar-btn")
                 .on("click", self.redo)
             )
             self.redo_button.disable()
@@ -266,10 +270,12 @@ class SRTEditor:
         try:
             if self.srt_format == "srt":
                 data = self.export_srt()
+                fmt = "srt"
             else:
                 data = json.dumps(self.export_json())
+                fmt = "json"
 
-            jsondata = {"format": self.srt_format, "data": data}
+            jsondata = {"format": fmt, "data": data}
             headers = get_auth_header()
             headers["Content-Type"] = "application/json"
             res = httpx.put(
@@ -505,7 +511,9 @@ class SRTEditor:
         import re
 
         def capitalize_after_periods(text: str) -> str:
-            return re.sub(r'(\.\s+)([a-z])', lambda m: m.group(1) + m.group(2).upper(), text)
+            return re.sub(
+                r"(\.\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text
+            )
 
         for index, seg in enumerate(concatenated):
             if seg.get("text", "").strip():
@@ -524,6 +532,8 @@ class SRTEditor:
                     )
                 )
                 self.speakers.add(seg["speaker"])
+
+        self.renumber_captions()
 
     def parse_srt(self, srt_content: str) -> None:
         """
@@ -948,6 +958,7 @@ class SRTEditor:
             self.seconds_to_timestamp(mid_seconds),
             self.seconds_to_timestamp(end_seconds),
             second_part,
+            speaker=caption.speaker,
         )
 
         # Insert new caption
@@ -983,6 +994,7 @@ class SRTEditor:
             self.seconds_to_timestamp(start_seconds),
             self.seconds_to_timestamp(end_seconds),
             "New caption text",
+            speaker=caption.speaker,
         )
 
         # Insert new caption
@@ -1108,7 +1120,7 @@ class SRTEditor:
 
                 # FIND SECTION
                 with ui.column().classes("w-full gap-2"):
-                    ui.label("Find").classes("text-caption text-gray-600")
+                    ui.label("Find").classes("text-caption text-theme-secondary")
 
                     with ui.row().classes("w-full items-center gap-2"):
                         search_input = (
@@ -1120,8 +1132,8 @@ class SRTEditor:
                             .props("outlined dense clearable")
                         )
 
-                        ui.button(icon="search").props(
-                            "flat dense round color=black"
+                        ui.button(icon="search").props("flat dense round").classes(
+                            "editor-btn"
                         ).on(
                             "click", lambda: self.search_captions(search_input.value)
                         ).tooltip(
@@ -1143,29 +1155,29 @@ class SRTEditor:
                         # Navigation + info
                         with ui.row().classes("items-center gap-1"):
                             ui.button(icon="keyboard_arrow_up").props(
-                                "flat dense round color=black"
-                            ).on(
+                                "flat dense round"
+                            ).classes("editor-btn").on(
                                 "click", lambda: self.navigate_search_results(-1)
                             ).tooltip(
                                 "Previous match"
                             )
                             ui.button(icon="keyboard_arrow_down").props(
-                                "flat dense round color=black"
-                            ).on(
+                                "flat dense round"
+                            ).classes("editor-btn").on(
                                 "click", lambda: self.navigate_search_results(1)
                             ).tooltip(
                                 "Next match"
                             )
 
                             self.search_info_label = ui.label("").classes(
-                                "text-caption text-gray-600"
+                                "text-caption text-theme-secondary"
                             )
 
                 ui.separator().classes("my-3")
 
                 # REPLACE SECTION
                 with ui.column().classes("w-full gap-2"):
-                    ui.label("Replace").classes("text-caption text-gray-600")
+                    ui.label("Replace").classes("text-caption text-theme-secondary")
 
                     replace_input = (
                         ui.input(
@@ -1176,21 +1188,23 @@ class SRTEditor:
                     )
 
                     with ui.row().classes("w-full justify-end gap-2"):
-                        ui.button("Replace").props("flat dense color=black").on(
+                        ui.button("Replace").props("flat dense").classes(
+                            "editor-btn"
+                        ).on(
                             "click",
                             lambda: self.replace_in_current_caption(
                                 replace_input.value
                             ),
                         )
 
-                        ui.button("Replace all").props("flat dense color=black").on(
-                            "click", lambda: self.replace_all(replace_input.value)
-                        )
+                        ui.button("Replace all").props("flat dense").classes(
+                            "editor-btn"
+                        ).on("click", lambda: self.replace_all(replace_input.value))
 
                 ui.separator().classes("my-3")
 
                 with ui.row().classes("w-full justify-end"):
-                    ui.button("Close").props("flat dense color=black").on(
+                    ui.button("Close").props("flat dense").classes("editor-btn").on(
                         "click", self.search_container.close
                     )
 
@@ -1203,9 +1217,9 @@ class SRTEditor:
         if open_window:
             self.search_container.open()
         else:
-            ui.button("Search").props("icon=search flat dense color=black").on(
-                "click", lambda: self.search_container.open()
-            ).classes("button-open-search")
+            ui.button("Search", icon="search").props("flat").classes(
+                "editor-btn editor-toolbar-btn"
+            ).on("click", lambda: self.search_container.open())
 
     def get_caption_from_time(self, caption_time: float) -> Optional[SRTCaption]:
         """
@@ -1213,7 +1227,7 @@ class SRTEditor:
         """
 
         for caption in self.captions:
-            if caption.get_start_seconds() <= caption_time <= caption.get_end_seconds():
+            if caption.get_start_seconds() <= caption_time < caption.get_end_seconds():
                 return caption
 
         return None
@@ -1298,16 +1312,14 @@ class SRTEditor:
         card_class = "cursor-pointer border-0 transition-all duration-200 w-full"
 
         if not caption.is_valid:
-            card_class += " border-red-400 bg-red-50 hover:border-red-500"
+            card_class += " caption-card-invalid"
         elif caption.is_selected and caption.is_highlighted:
             # Slightly darker yellow background
-            card_class += (
-                " shadow-lg border-yellow-400 bg-yellow-100 hover:border-yellow-500"
-            )
+            card_class += " shadow-lg caption-card-selected-highlighted"
         elif caption.is_selected:
             card_class += " shadow-lg"
         elif caption.is_highlighted:
-            card_class += " border-yellow-400 bg-yellow-50 hover:border-yellow-500"
+            card_class += " caption-card-highlighted"
         else:
             card_class += " hover:shadow-md shadow-none"
 
@@ -1321,10 +1333,11 @@ class SRTEditor:
                     with ui.row().classes("w-full justify-between") as action_row:
                         action_row.props("id=action_row")
                         ui.label(f"#{caption.index}").classes(
-                            "font-bold text-sm text-gray-500"
+                            "font-bold text-sm text-theme-muted"
                         )
 
                         if self.data_format == "txt":
+                            self.speakers.add(caption.speaker)
                             speaker_select = ui.select(
                                 options=list(self.speakers),
                                 value=caption.speaker,
@@ -1366,14 +1379,15 @@ class SRTEditor:
                     )
 
                     # Action buttons
-                    # Row with buttons to the left
                     with ui.row().classes("w-full justify-between"):
                         ui.button("Split", icon="call_split").props(
                             "flat dense"
-                        ).on("click", lambda: self.split_caption(caption))
-                        ui.button("Merge with previous", icon="merge_type").props(
+                        ).classes("editor-btn editor-caption-btn").on(
+                            "click", lambda: self.split_caption(caption)
+                        )
+                        ui.button("Merge prev", icon="merge_type").props(
                             "flat dense"
-                        ).on(
+                        ).classes("editor-btn editor-caption-btn").on(
                             "click",
                             lambda: (
                                 self.merge_with_previous(caption)
@@ -1381,9 +1395,9 @@ class SRTEditor:
                                 else None
                             ),
                         )
-                        ui.button("Merge with next", icon="merge_type").props(
+                        ui.button("Merge next", icon="merge_type").props(
                             "flat dense"
-                        ).on(
+                        ).classes("editor-btn editor-caption-btn").on(
                             "click",
                             lambda: (
                                 self.merge_with_next(caption)
@@ -1392,7 +1406,9 @@ class SRTEditor:
                             ),
                         )
 
-                        ui.button("Close").props("flat dense").on(
+                        ui.button("Close").props("flat dense").classes(
+                            "editor-btn editor-caption-btn caption-close"
+                        ).on(
                             "click",
                             lambda: self.select_caption(
                                 caption,
@@ -1400,13 +1416,15 @@ class SRTEditor:
                                 True,
                                 new_text=text_area.value,
                             ),
-                        ).classes("caption-close")
-
-                        ui.button("Add").props("flat dense").on(
-                            "click", lambda: self.add_caption_after(caption)
                         )
 
-                        ui.button("Delete", color="red").props("flat dense").on(
+                        ui.button("Add").props("flat dense").classes(
+                            "editor-btn editor-caption-btn"
+                        ).on("click", lambda: self.add_caption_after(caption))
+
+                        ui.button("Delete").props("flat dense").classes(
+                            "editor-btn editor-caption-btn"
+                        ).style("color: var(--color-text-danger) !important;").on(
                             "click", lambda: self.remove_caption(caption)
                         )
                 else:
@@ -1422,7 +1440,7 @@ class SRTEditor:
                                     "font-bold text-sm"
                                 )
                         ui.label(f"{caption.start_time} - {caption.end_time}").classes(
-                            "text-sm text-gray-500"
+                            "text-sm text-theme-muted"
                         )
 
                         ui.html(highlighted_text, sanitize=False).classes(
@@ -1441,12 +1459,12 @@ class SRTEditor:
                                     )
                             ui.label(
                                 f"{caption.start_time} - {caption.end_time}"
-                            ).classes("text-sm text-gray-500")
+                            ).classes("text-sm text-theme-muted")
                         with ui.row().classes("w-full justify-between items-end"):
                             ui.label(caption.text).classes(
                                 "text-sm leading-relaxed whitespace-pre-wrap"
                             )
-                            text_color = "text-gray-500"
+                            text_color = "text-theme-muted"
 
                             tooltip_text = (
                                 "Character count."
@@ -1458,18 +1476,24 @@ class SRTEditor:
                             line_lengths = [str(len(x)) for x in lines]
 
                             # Check for exceeded limit
-                            if self.data_format != "txt" and any(
+                            exceeded = self.data_format != "txt" and any(
                                 len(x) > CHARACTER_LIMIT for x in lines
-                            ):
+                            )
+                            if exceeded:
                                 text_color = CHARACTER_LIMIT_EXCEEDED_COLOR
                                 tooltip_text = f"Character limit of {CHARACTER_LIMIT} exceeded in one or more lines."
 
                             character_label = "/".join(line_lengths)
 
-                            with ui.label(f"({character_label})").classes(
-                                f"text-sm text-right {text_color}"
-                            ):
-                                ui.tooltip(tooltip_text)
+                            with ui.row().classes("items-center gap-1"):
+                                if exceeded:
+                                    ui.icon("warning", size="xs").style(
+                                        "color: var(--color-text-danger);"
+                                    )
+                                with ui.label(f"({character_label})").classes(
+                                    f"text-sm text-right {text_color}"
+                                ):
+                                    ui.tooltip(tooltip_text)
 
                 card.on(
                     "click",
@@ -1501,7 +1525,7 @@ class SRTEditor:
                 with self.main_container:
                     if not self.captions:
                         ui.label("No captions loaded").classes(
-                            "text-gray-500 text-center p-8"
+                            "text-theme-muted text-center p-8"
                         )
                     else:
                         for caption in self.captions:
@@ -1545,15 +1569,13 @@ class SRTEditor:
         card_class = "cursor-pointer border-0 transition-all duration-200 w-full"
 
         if not caption.is_valid:
-            card_class += " border-red-400 bg-red-50 hover:border-red-500"
+            card_class += " caption-card-invalid"
         elif caption.is_selected and caption.is_highlighted:
-            card_class += (
-                " shadow-lg border-yellow-400 bg-yellow-100 hover:border-yellow-500"
-            )
+            card_class += " shadow-lg caption-card-selected-highlighted"
         elif caption.is_selected:
             card_class += " shadow-lg"
         elif caption.is_highlighted:
-            card_class += " border-yellow-400 bg-yellow-50 hover:border-yellow-500"
+            card_class += " caption-card-highlighted"
         else:
             card_class += " hover:shadow-md shadow-none"
 
@@ -1562,7 +1584,7 @@ class SRTEditor:
                 with ui.row().classes("w-full justify-between") as action_row:
                     action_row.props("id=action_row")
                     ui.label(f"#{caption.index}").classes(
-                        "font-bold text-sm text-gray-500"
+                        "font-bold text-sm text-theme-muted"
                     )
 
                     if self.data_format == "txt":
@@ -1606,12 +1628,12 @@ class SRTEditor:
                 )
 
                 with ui.row().classes("w-full justify-between"):
-                    ui.button("Split", icon="call_split").props(
-                        "flat dense"
+                    ui.button("Split", icon="call_split").props("flat dense").classes(
+                        "editor-btn editor-caption-btn"
                     ).on("click", lambda: self.split_caption(caption))
-                    ui.button("Merge with previous", icon="merge_type").props(
+                    ui.button("Merge prev", icon="merge_type").props(
                         "flat dense"
-                    ).on(
+                    ).classes("editor-btn editor-caption-btn").on(
                         "click",
                         lambda: (
                             self.merge_with_previous(caption)
@@ -1619,9 +1641,9 @@ class SRTEditor:
                             else None
                         ),
                     )
-                    ui.button("Merge with next", icon="merge_type").props(
+                    ui.button("Merge next", icon="merge_type").props(
                         "flat dense"
-                    ).on(
+                    ).classes("editor-btn editor-caption-btn").on(
                         "click",
                         lambda: (
                             self.merge_with_next(caption)
@@ -1630,18 +1652,22 @@ class SRTEditor:
                         ),
                     )
 
-                    ui.button("Close").props("flat dense").on(
+                    ui.button("Close").props("flat dense").classes(
+                        "editor-btn editor-caption-btn caption-close"
+                    ).on(
                         "click",
                         lambda: self.select_caption(
                             caption, speaker_select, True, new_text=text_area.value
                         ),
-                    ).classes("caption-close")
-
-                    ui.button("Add").props("flat dense").on(
-                        "click", lambda: self.add_caption_after(caption)
                     )
 
-                    ui.button("Delete", color="red").props("flat dense").on(
+                    ui.button("Add").props("flat dense").classes(
+                        "editor-btn editor-caption-btn"
+                    ).on("click", lambda: self.add_caption_after(caption))
+
+                    ui.button("Delete").props("flat dense").classes(
+                        "editor-btn editor-caption-btn"
+                    ).style("color: var(--color-text-danger) !important;").on(
                         "click", lambda: self.remove_caption(caption)
                     )
             else:
@@ -1654,7 +1680,7 @@ class SRTEditor:
                         if self.data_format == "txt":
                             ui.label(f"{caption.speaker}:").classes("font-bold text-sm")
                     ui.label(f"{caption.start_time} - {caption.end_time}").classes(
-                        "text-sm text-gray-500"
+                        "text-sm text-theme-muted"
                     )
 
                     ui.html(highlighted_text, sanitize=False).classes(
@@ -1670,13 +1696,13 @@ class SRTEditor:
                                     "font-bold text-sm"
                                 )
                         ui.label(f"{caption.start_time} - {caption.end_time}").classes(
-                            "text-sm text-gray-500"
+                            "text-sm text-theme-muted"
                         )
                     with ui.row().classes("w-full justify-between items-end"):
                         ui.label(caption.text).classes(
                             "text-sm leading-relaxed whitespace-pre-wrap"
                         )
-                        text_color = "text-gray-500"
+                        text_color = "text-theme-muted"
 
                         tooltip_text = (
                             "Character count."
@@ -1688,18 +1714,24 @@ class SRTEditor:
                         line_lengths = [str(len(x)) for x in lines]
 
                         # Check for exceeded limit
-                        if self.data_format != "txt" and any(
+                        exceeded = self.data_format != "txt" and any(
                             len(x) > CHARACTER_LIMIT for x in lines
-                        ):
+                        )
+                        if exceeded:
                             text_color = CHARACTER_LIMIT_EXCEEDED_COLOR
                             tooltip_text = f"Character limit of {CHARACTER_LIMIT} exceeded in one or more lines."
 
                         character_label = "/".join(line_lengths)
 
-                        with ui.label(f"({character_label})").classes(
-                            f"text-sm text-right {text_color}"
-                        ):
-                            ui.tooltip(tooltip_text)
+                        with ui.row().classes("items-center gap-1"):
+                            if exceeded:
+                                ui.icon("warning", size="xs").style(
+                                    "color: var(--color-text-danger);"
+                                )
+                            with ui.label(f"({character_label})").classes(
+                                f"text-sm text-right {text_color}"
+                            ):
+                                ui.tooltip(tooltip_text)
 
             card.on(
                 "click",
@@ -1722,7 +1754,6 @@ class SRTEditor:
             caption.is_valid = True
 
         errors = []
-        warnings = []
         seen_times = set()
         start_times = {}
         errorenous_captions = []
@@ -1821,7 +1852,9 @@ class SRTEditor:
         )
 
         with ui.dialog() as dialog:
-            with ui.card().classes("p-6").style("max-width: 700px; min-width: 500px; max-height: 90vh; overflow-y: auto;"):
+            with ui.card().classes("p-6").style(
+                "max-width: 700px; min-width: 500px; max-height: 90vh; overflow-y: auto;"
+            ):
                 # Header
                 with ui.row().classes("w-full items-center justify-between mb-4"):
                     ui.label("Subtitle validation").classes("text-h5 font-bold")
@@ -1833,41 +1866,45 @@ class SRTEditor:
 
                 if errors:
                     # Error summary
-                    with ui.card().classes("bg-red-50 border-l-4 p-4 mb-4").style(
-                        "border-left-color: #dc2626;"
+                    with ui.card().classes("border-l-4 p-4 mb-4").style(
+                        "background-color: var(--color-status-error-bg); border-left-color: var(--color-status-error-border);"
                     ):
                         with ui.row().classes("items-center gap-2 mb-2"):
-                            ui.icon("error", size="md").classes("text-red-600")
+                            ui.icon("error", size="md").style(
+                                "color: var(--color-text-danger);"
+                            )
                             ui.label(
                                 f"{len(set(errorenous_captions))} caption(s) with issues found"
-                            ).classes("text-h6 font-semibold text-red-900")
+                            ).classes("text-h6 font-semibold")
 
                     # Error list
                     with ui.column().classes("w-full gap-2 max-h-96 overflow-y-auto"):
                         for error in errors:
                             with ui.row().classes("items-start gap-2"):
-                                ui.icon("warning", size="sm").classes(
-                                    "text-red-600 mt-1"
+                                ui.icon("warning", size="sm").style(
+                                    "color: var(--color-text-danger); margin-top: 4px;"
                                 )
                                 ui.label(error).classes("text-body2")
                 else:
                     # Success message
-                    with ui.card().classes("bg-green-50 border-l-4 p-4").style(
-                        "border-left-color: #16a34a;"
+                    with ui.card().classes("border-l-4 p-4").style(
+                        "background-color: var(--color-status-ok-bg); border-left-color: var(--color-status-ok-border);"
                     ):
                         with ui.row().classes("items-center gap-3"):
-                            ui.icon("check_circle", size="lg").classes("text-green-600")
+                            ui.icon("check_circle", size="lg").style(
+                                "color: var(--color-status-ok-border);"
+                            )
                             with ui.column().classes("gap-1"):
                                 ui.label("All captions are valid!").classes(
-                                    "text-h6 font-semibold text-green-900"
+                                    "text-h6 font-semibold"
                                 )
                                 ui.label(
                                     f"{len(self.captions)} caption(s) checked"
-                                ).classes("text-body2 text-green-700")
+                                ).classes("text-body2 text-theme-secondary")
 
                 # Footer
                 with ui.row().classes("w-full justify-end mt-4").style(
-                    "position: sticky; bottom: -24px; background: white; padding-bottom: 8px; z-index: 1;"
+                    "position: sticky; bottom: -24px; background-color: var(--color-bg-surface); padding-bottom: 8px; z-index: 1;"
                 ):
                     ui.button("Close", on_click=dialog.close).props("color=primary")
 
@@ -1922,7 +1959,9 @@ class SRTEditor:
         ]
 
         with ui.dialog() as dialog:
-            with ui.card().classes("w-2/3 max-w-2xl").style("padding: 24px; max-height: 90vh; overflow-y: auto;"):
+            with ui.card().classes("w-2/3 max-w-2xl").style(
+                "padding: 24px; max-height: 90vh; overflow-y: auto;"
+            ):
                 ui.label("Keyboard shortcuts").classes("text-h5 mb-4 font-bold")
 
                 with ui.column().classes("w-full gap-4"):
@@ -1937,11 +1976,13 @@ class SRTEditor:
                                 ):
                                     ui.label(action).classes("text-body1")
                                     ui.label(keys).classes(
-                                        "text-body2 font-mono bg-gray-100 px-2 py-1 rounded"
+                                        "text-body2 font-mono px-2 py-1 rounded"
+                                    ).style(
+                                        "background-color: var(--color-bg-surface-hover);"
                                     )
 
                 with ui.row().classes("w-full justify-end mt-4").style(
-                    "position: sticky; bottom: -24px; background: white; padding-bottom: 8px; z-index: 1;"
+                    "position: sticky; bottom: -24px; background-color: var(--color-bg-surface-alt); padding-bottom: 8px; z-index: 1;"
                 ):
                     ui.button("Close").props("flat color=primary").on(
                         "click", dialog.close
@@ -1950,9 +1991,9 @@ class SRTEditor:
         if open_window:
             dialog.open()
         else:
-            ui.button("Shortcuts").props("icon=keyboard flat dense color=black").on(
-                "click", lambda: dialog.open()
-            ).classes("button-open-search")
+            ui.button("Shortcuts", icon="keyboard").props("flat").classes(
+                "editor-btn editor-toolbar-btn"
+            ).on("click", lambda: dialog.open()).classes("button-open-search")
 
     def show_export_dialog(
         self, filename: str, bulk_editors: list | None = None
@@ -1968,9 +2009,7 @@ class SRTEditor:
 
         filename = sanitize_filename(filename)
         if bulk_editors:
-            bulk_editors = [
-                (sanitize_filename(fn), ed) for fn, ed in bulk_editors
-            ]
+            bulk_editors = [(sanitize_filename(fn), ed) for fn, ed in bulk_editors]
 
         is_bulk = bulk_editors is not None and len(bulk_editors) > 0
         # For bulk mode with txt formats: show preview using first file
@@ -1978,18 +2017,20 @@ class SRTEditor:
 
         ui.add_head_html(default_styles)
         with ui.dialog() as dialog:
-            card = ui.card().classes("p-6").style(
-                f"min-width: {'1000' if (not is_bulk or bulk_needs_preview) else '500'}px; "
-                f"max-width: {'1400' if (not is_bulk or bulk_needs_preview) else '700'}px; "
-                "max-height: 90vh; overflow-y: auto; "
-                "background-color: #ffffff;"
+            card = (
+                ui.card()
+                .classes("p-6")
+                .style(
+                    f"min-width: {'1000' if (not is_bulk or bulk_needs_preview) else '500'}px; "
+                    f"max-width: {'1400' if (not is_bulk or bulk_needs_preview) else '700'}px; "
+                    "max-height: 90vh; overflow-y: auto; "
+                    "background-color: var(--color-bg-surface-alt);"
+                )
             )
             with card:
                 # Header
                 with ui.row().classes("w-full items-center justify-between mb-4"):
-                    ui.label("Export transcript").classes(
-                        "text-h5 font-bold text-black"
-                    )
+                    ui.label("Export transcript").classes("text-h5 font-bold")
                     ui.button(icon="close", on_click=dialog.close).props(
                         "flat round dense color=grey-7"
                     )
@@ -2005,7 +2046,9 @@ class SRTEditor:
                 with ui.row().classes("w-full gap-6"):
                     # Left: Options (fixed width when preview shown)
                     with ui.column().classes("gap-4").style(
-                        "flex: 0 0 400px;" if (not is_bulk or bulk_needs_preview) else "width: 100%;"
+                        "flex: 0 0 400px;"
+                        if (not is_bulk or bulk_needs_preview)
+                        else "width: 100%;"
                     ):
                         # Format
                         ui.label("Format").classes("text-subtitle1 font-semibold")
@@ -2257,7 +2300,7 @@ class SRTEditor:
                                 card.style(
                                     f"min-width: {'1000' if show_prev else '500'}px; "
                                     f"max-width: {'1400' if show_prev else '700'}px; "
-                                    "background-color: #ffffff;"
+                                    "background-color: var(--color-bg-surface);"
                                 )
 
                         fmt.on(
@@ -2272,7 +2315,9 @@ class SRTEditor:
                             bulk_preview_col = preview_col
                         with preview_col:
                             if bulk_needs_preview:
-                                first_fn = bulk_editors[0][0] if bulk_editors else filename
+                                first_fn = (
+                                    bulk_editors[0][0] if bulk_editors else filename
+                                )
                                 ui.label("Preview").classes(
                                     "text-subtitle1 font-semibold mb-2"
                                 ).tooltip(f"Showing: {first_fn}")
@@ -2399,7 +2444,9 @@ class SRTEditor:
                                                     c.start_time, ts_fmt.value
                                                 )
                                             if ts_which.value in ["end", "both"]:
-                                                cd["end"] = fmt_ts(c.end_time, ts_fmt.value)
+                                                cd["end"] = fmt_ts(
+                                                    c.end_time, ts_fmt.value
+                                                )
                                         d["captions"].append(cd)
                                     out = json.dumps(
                                         d,
@@ -2420,20 +2467,28 @@ class SRTEditor:
                                         if csv_spk_incl.value:
                                             h.append("speaker")
                                         h.append("text")
-                                        lines.append(delim.join(f"{q}{x}{q}" for x in h))
+                                        lines.append(
+                                            delim.join(f"{q}{x}{q}" for x in h)
+                                        )
                                     for c in caps:
                                         r = [str(c.index)]
                                         if ts_incl.value:
                                             if ts_which.value in ["start", "both"]:
-                                                r.append(fmt_ts(c.start_time, ts_fmt.value))
+                                                r.append(
+                                                    fmt_ts(c.start_time, ts_fmt.value)
+                                                )
                                             if ts_which.value in ["end", "both"]:
-                                                r.append(fmt_ts(c.end_time, ts_fmt.value))
+                                                r.append(
+                                                    fmt_ts(c.end_time, ts_fmt.value)
+                                                )
                                         if csv_spk_incl.value:
                                             r.append(c.speaker)
                                         r.append(
                                             c.text.replace(q, q + q).replace("\n", " ")
                                         )
-                                        lines.append(delim.join(f"{q}{x}{q}" for x in r))
+                                        lines.append(
+                                            delim.join(f"{q}{x}{q}" for x in r)
+                                        )
                                     out = "\n".join(lines)
                                 case "tsv":
                                     # Determine tab character
@@ -2458,13 +2513,19 @@ class SRTEditor:
                                         r = [str(c.index)]
                                         if ts_incl.value:
                                             if ts_which.value in ["start", "both"]:
-                                                r.append(fmt_ts(c.start_time, ts_fmt.value))
+                                                r.append(
+                                                    fmt_ts(c.start_time, ts_fmt.value)
+                                                )
                                             if ts_which.value in ["end", "both"]:
-                                                r.append(fmt_ts(c.end_time, ts_fmt.value))
+                                                r.append(
+                                                    fmt_ts(c.end_time, ts_fmt.value)
+                                                )
                                         if tsv_spk_incl.value:
                                             r.append(c.speaker)
                                         r.append(
-                                            c.text.replace("\t", "  ").replace("\n", " ")
+                                            c.text.replace("\t", "  ").replace(
+                                                "\n", " "
+                                            )
                                         )
                                         lines.append(tab_char.join(r))
                                     out = "\n".join(lines)
@@ -2533,14 +2594,16 @@ class SRTEditor:
 
                 # Footer
                 with ui.row().classes("w-full justify-between items-center").style(
-                    "position: sticky; bottom: -24px; background: white; padding-bottom: 8px; z-index: 1;"
+                    "position: sticky; bottom: -24px; background-color: inherit; padding-bottom: 8px; z-index: 1;"
                 ):
                     if is_bulk:
                         ui.label("").bind_text_from(
                             fmt, "value", backward=lambda v: f"Format: .{v}"
                         ).classes("text-body2")
                     else:
-                        ui.label(f"File: {Path(filename).stem}.{fmt.value}").classes("text-body2")
+                        ui.label(f"File: {Path(filename).stem}.{fmt.value}").classes(
+                            "text-body2"
+                        )
                     with ui.row().classes("gap-2"):
                         ui.button("Close", on_click=dialog.close).props(
                             "outline color=black"
@@ -2548,6 +2611,7 @@ class SRTEditor:
 
                         def exp():
                             try:
+
                                 def fmt_ts(ts, f):
                                     p = ts.replace(",", ":").split(":")
                                     h, m, s, ms = (
@@ -2646,17 +2710,23 @@ class SRTEditor:
                                             if csv_spk_incl.value:
                                                 h.append("speaker")
                                             h.append("text")
-                                            lines.append(d.join(f"{q}{x}{q}" for x in h))
+                                            lines.append(
+                                                d.join(f"{q}{x}{q}" for x in h)
+                                            )
                                         for cap in editor.captions:
                                             r = [str(cap.index)]
                                             if ts_incl.value:
                                                 if ts_which.value in ["start", "both"]:
                                                     r.append(
-                                                        fmt_ts(cap.start_time, ts_fmt.value)
+                                                        fmt_ts(
+                                                            cap.start_time, ts_fmt.value
+                                                        )
                                                     )
                                                 if ts_which.value in ["end", "both"]:
                                                     r.append(
-                                                        fmt_ts(cap.end_time, ts_fmt.value)
+                                                        fmt_ts(
+                                                            cap.end_time, ts_fmt.value
+                                                        )
                                                     )
                                             if csv_spk_incl.value:
                                                 r.append(cap.speaker)
@@ -2665,7 +2735,9 @@ class SRTEditor:
                                                     "\n", " "
                                                 )
                                             )
-                                            lines.append(d.join(f"{q}{x}{q}" for x in r))
+                                            lines.append(
+                                                d.join(f"{q}{x}{q}" for x in r)
+                                            )
                                         c = "\n".join(lines)
                                     elif fmt.value == "tsv":
                                         if tsv_tab_type.value == "\\t":
@@ -2690,11 +2762,15 @@ class SRTEditor:
                                             if ts_incl.value:
                                                 if ts_which.value in ["start", "both"]:
                                                     r.append(
-                                                        fmt_ts(cap.start_time, ts_fmt.value)
+                                                        fmt_ts(
+                                                            cap.start_time, ts_fmt.value
+                                                        )
                                                     )
                                                 if ts_which.value in ["end", "both"]:
                                                     r.append(
-                                                        fmt_ts(cap.end_time, ts_fmt.value)
+                                                        fmt_ts(
+                                                            cap.end_time, ts_fmt.value
+                                                        )
                                                     )
                                             if tsv_spk_incl.value:
                                                 r.append(cap.speaker)
