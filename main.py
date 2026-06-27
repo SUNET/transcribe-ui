@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import secrets
 
 from fastapi import Request
@@ -41,6 +42,134 @@ create_srt()
 create_admin()
 create_user_page()
 create_status()
+
+# ---------------------------------------------------------------------------
+# JavaScript helpers shared by registration and authentication flows.
+# Injected inline so the WebAuthn calls happen in the user-gesture window.
+# ---------------------------------------------------------------------------
+_JS_HELPERS = """
+function _b64uToBytes(s) {
+    const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64);
+    return Uint8Array.from(bin, c => c.charCodeAt(0));
+}
+function _bytesToB64u(buf) {
+    let bin = '';
+    new Uint8Array(buf).forEach(b => bin += String.fromCharCode(b));
+    return btoa(bin).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
+}
+function _bytesToHex(buf) {
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+"""
+
+
+def _webauthn_register_js(token: str, api_url: str) -> str:
+    return f"""(async () => {{
+{_JS_HELPERS}
+const token = {json.dumps(token)};
+const apiUrl = {json.dumps(api_url)};
+
+const beginResp = await fetch(apiUrl + '/api/v1/webauthn/register/begin', {{
+    method: 'POST',
+    headers: {{'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}}
+}});
+if (!beginResp.ok) throw new Error('begin failed: ' + beginResp.status);
+const opts = await beginResp.json();
+
+opts.challenge = _b64uToBytes(opts.challenge);
+opts.user.id = _b64uToBytes(opts.user.id);
+if (opts.excludeCredentials) {{
+    opts.excludeCredentials = opts.excludeCredentials.map(c => ({{...c, id: _b64uToBytes(c.id)}}));
+}}
+if (opts.extensions?.prf?.eval?.first) {{
+    opts.extensions.prf.eval.first = _b64uToBytes(opts.extensions.prf.eval.first);
+}}
+
+const cred = await navigator.credentials.create({{publicKey: opts}});
+if (!cred) throw new Error('Cancelled');
+
+const prf = cred.getClientExtensionResults()?.prf;
+if (!prf?.results?.first) throw new Error('PRF_NOT_SUPPORTED');
+const prfHex = _bytesToHex(prf.results.first);
+
+const payload = {{
+    id: cred.id,
+    rawId: _bytesToB64u(cred.rawId),
+    type: cred.type,
+    response: {{
+        clientDataJSON: _bytesToB64u(cred.response.clientDataJSON),
+        attestationObject: _bytesToB64u(cred.response.attestationObject),
+    }},
+    prf_output: prfHex,
+}};
+
+const completeResp = await fetch(apiUrl + '/api/v1/webauthn/register/complete', {{
+    method: 'POST',
+    headers: {{'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}},
+    body: JSON.stringify(payload)
+}});
+if (!completeResp.ok) {{
+    const err = await completeResp.json().catch(() => ({{}}));
+    throw new Error(err.detail || 'complete failed: ' + completeResp.status);
+}}
+
+return prfHex;
+}})()"""
+
+
+def _webauthn_auth_js(token: str, api_url: str) -> str:
+    return f"""(async () => {{
+{_JS_HELPERS}
+const token = {json.dumps(token)};
+const apiUrl = {json.dumps(api_url)};
+
+const beginResp = await fetch(apiUrl + '/api/v1/webauthn/auth/begin', {{
+    method: 'POST',
+    headers: {{'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}}
+}});
+if (!beginResp.ok) throw new Error('begin failed: ' + beginResp.status);
+const opts = await beginResp.json();
+
+opts.challenge = _b64uToBytes(opts.challenge);
+if (opts.allowCredentials) {{
+    opts.allowCredentials = opts.allowCredentials.map(c => ({{...c, id: _b64uToBytes(c.id)}}));
+}}
+if (opts.extensions?.prf?.eval?.first) {{
+    opts.extensions.prf.eval.first = _b64uToBytes(opts.extensions.prf.eval.first);
+}}
+
+const cred = await navigator.credentials.get({{publicKey: opts}});
+if (!cred) throw new Error('Cancelled');
+
+const prf = cred.getClientExtensionResults()?.prf;
+if (!prf?.results?.first) throw new Error('PRF_NOT_SUPPORTED');
+const prfHex = _bytesToHex(prf.results.first);
+
+const assertion = {{
+    id: cred.id,
+    rawId: _bytesToB64u(cred.rawId),
+    type: cred.type,
+    response: {{
+        clientDataJSON: _bytesToB64u(cred.response.clientDataJSON),
+        authenticatorData: _bytesToB64u(cred.response.authenticatorData),
+        signature: _bytesToB64u(cred.response.signature),
+        userHandle: cred.response.userHandle ? _bytesToB64u(cred.response.userHandle) : null,
+    }}
+}};
+
+const completeResp = await fetch(apiUrl + '/api/v1/webauthn/auth/complete', {{
+    method: 'POST',
+    headers: {{'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}},
+    body: JSON.stringify(assertion)
+}});
+if (!completeResp.ok) {{
+    const err = await completeResp.json().catch(() => ({{}}));
+    throw new Error(err.detail || 'complete failed: ' + completeResp.status);
+}}
+
+return prfHex;
+}})()"""
 
 
 @ui.page("/")
@@ -113,122 +242,283 @@ async def index(request: Request) -> None:
         ui.dark_mode(app.storage.user["dark_mode"])
 
         if not user_data["encryption_settings"]:
+            # ---------------------------------------------------------------
+            # First-time setup: user chooses passphrase or passkey.
+            # ---------------------------------------------------------------
             with ui.dialog() as dialog:
-                with ui.card():
-                    ui.label("Set your encryption passphrase").classes("text-h6")
+                with ui.card().style("min-width: 380px;"):
+                    ui.label("Set up encryption").classes("text-h6")
                     ui.label(
-                        "This passphrase will be used to encrypt your files. It cannot be recovered if lost."
+                        "Choose how to protect your encryption key. "
+                        "This cannot be recovered if lost."
                     ).classes("text-subtitle2").style("margin-bottom: 10px;")
-                    ui.label(
-                        "The passphrase must be at least 8 characters long."
-                    ).classes("text-subtitle2").style("margin-bottom: 10px;")
-                    password_input = ui.input(
-                        "Encryption Passphrase", password=True
-                    ).style("width: 100%;")
-                    confirm_password_input = ui.input(
-                        "Confirm Encryption Passphrase", password=True
-                    ).style("width: 100%; margin-bottom: 10px;")
-                    error_label = (
-                        ui.label(
-                            "Passphrases do not match or are less than 8 characters."
-                        )
-                        .classes("text-negative")
-                        .style("margin-bottom: 10px;")
-                    )
-                    error_label.visible = False
 
-                    def set_encryption_password() -> None:
-                        if (
-                            password_input.value == confirm_password_input.value
-                        ) and len(password_input.value) >= 8:
-                            try:
-                                encryption_password_set(password_input.value)
-                            except Exception:
-                                ui.notify(
-                                    "Failed to set encryption passphrase.",
-                                    color="negative",
+                    with ui.tabs().classes("w-full") as tabs:
+                        tab_passphrase = ui.tab("Passphrase", icon="password")
+                        tab_passkey = ui.tab("Passkey", icon="fingerprint")
+
+                    with ui.tab_panels(tabs, value=tab_passphrase).classes("w-full"):
+                        # --- Passphrase panel ---
+                        with ui.tab_panel(tab_passphrase):
+                            ui.label(
+                                "The passphrase must be at least 8 characters long."
+                            ).classes("text-subtitle2").style("margin-bottom: 10px;")
+                            password_input = ui.input(
+                                "Encryption Passphrase", password=True
+                            ).style("width: 100%;")
+                            confirm_password_input = ui.input(
+                                "Confirm Encryption Passphrase", password=True
+                            ).style("width: 100%; margin-bottom: 10px;")
+                            error_label = (
+                                ui.label(
+                                    "Passphrases do not match or are less than 8 characters."
                                 )
-                                return
-
-                            ui.notify(
-                                "Encryption passphrase set successfully.",
-                                color="positive",
+                                .classes("text-negative")
+                                .style("margin-bottom: 10px;")
                             )
-                            dialog.close()
-                            ui.navigate.to("/")
+                            error_label.visible = False
 
-                        else:
-                            error_label.visible = True
+                            def set_encryption_password() -> None:
+                                if (
+                                    password_input.value == confirm_password_input.value
+                                ) and len(password_input.value) >= 8:
+                                    try:
+                                        encryption_password_set(password_input.value)
+                                    except Exception:
+                                        ui.notify(
+                                            "Failed to set encryption passphrase.",
+                                            color="negative",
+                                        )
+                                        return
 
-                    ui.button(
-                        "Set Passphrase",
-                        on_click=set_encryption_password,
-                    ).props("color=black").style("margin-top: 10px;")
+                                    ui.notify(
+                                        "Encryption passphrase set successfully.",
+                                        color="positive",
+                                    )
+                                    dialog.close()
+                                    ui.navigate.to("/")
+
+                                else:
+                                    error_label.visible = True
+
+                            ui.button(
+                                "Set Passphrase",
+                                on_click=set_encryption_password,
+                            ).props("color=black").style("margin-top: 10px;")
+
+                        # --- Passkey panel ---
+                        with ui.tab_panel(tab_passkey):
+                            ui.label(
+                                "Use a passkey (YubiKey, Face ID, Touch ID) to protect your "
+                                "encryption key. Requires a browser that supports the WebAuthn "
+                                "PRF extension (Chrome 116+ or Safari on macOS 14+ / iOS 17+)."
+                            ).classes("text-subtitle2").style("margin-bottom: 10px;")
+
+                            passkey_error = (
+                                ui.label("")
+                                .classes("text-negative")
+                                .style("margin-bottom: 10px;")
+                            )
+                            passkey_error.visible = False
+
+                            async def register_passkey() -> None:
+                                passkey_error.visible = False
+                                current_token = app.storage.user.get("token", "")
+                                try:
+                                    prf_output = await ui.run_javascript(
+                                        _webauthn_register_js(current_token, settings.API_URL),
+                                        timeout=120.0,
+                                    )
+                                except Exception as e:
+                                    err = str(e)
+                                    if "PRF_NOT_SUPPORTED" in err:
+                                        passkey_error.set_text(
+                                            "This authenticator does not support the PRF extension. "
+                                            "Try a different browser or use a passphrase instead."
+                                        )
+                                    else:
+                                        passkey_error.set_text(
+                                            f"Passkey registration failed: {err}"
+                                        )
+                                    passkey_error.visible = True
+                                    return
+
+                                if not prf_output:
+                                    passkey_error.set_text("No PRF output returned.")
+                                    passkey_error.visible = True
+                                    return
+
+                                # Backend already generated the RSA keypair during register/complete.
+                                # Store the PRF output as the session encryption password.
+                                app.storage.user["encryption_password"] = storage_encrypt(
+                                    prf_output
+                                )
+                                ui.notify(
+                                    "Passkey registered successfully.",
+                                    color="positive",
+                                )
+                                dialog.close()
+                                ui.navigate.to("/home")
+
+                            ui.button(
+                                "Register Passkey",
+                                icon="fingerprint",
+                                on_click=register_passkey,
+                            ).props("color=black").style("margin-top: 10px;")
+
                 dialog.open()
         else:
-            with ui.dialog() as dialog:
-                with ui.card():
-                    ui.label("Enter your encryption passphrase").classes("text-h6")
-                    password_input = ui.input(
-                        "Encryption Passphrase", password=True
-                    ).style("width: 100%; margin-bottom: 10px;")
-                    password_input.on(
-                        "keydown.enter", lambda e: verify_encryption_password()
-                    )
-                    password_input.props("autofocus")
+            has_webauthn = user_data.get("has_webauthn", False)
 
-                    def verify_encryption_password() -> None:
-                        if password_input.value:
+            if has_webauthn:
+                # -----------------------------------------------------------
+                # Passkey unlock flow
+                # -----------------------------------------------------------
+                with ui.dialog() as dialog:
+                    with ui.card().style("min-width: 340px;"):
+                        ui.label("Unlock with passkey").classes("text-h6")
+                        ui.label(
+                            "Use your registered passkey to unlock your encryption key."
+                        ).classes("text-subtitle2").style("margin-bottom: 10px;")
+
+                        passkey_error = (
+                            ui.label("")
+                            .classes("text-negative")
+                            .style("margin-bottom: 10px;")
+                        )
+                        passkey_error.visible = False
+
+                        async def unlock_with_passkey() -> None:
+                            passkey_error.visible = False
+                            current_token = app.storage.user.get("token", "")
+                            try:
+                                prf_output = await ui.run_javascript(
+                                    _webauthn_auth_js(current_token, settings.API_URL),
+                                    timeout=120.0,
+                                )
+                            except Exception as e:
+                                passkey_error.set_text(f"Passkey authentication failed: {e}")
+                                passkey_error.visible = True
+                                return
+
+                            if not prf_output:
+                                passkey_error.set_text("No PRF output returned.")
+                                passkey_error.visible = True
+                                return
+
                             app.storage.user["encryption_password"] = storage_encrypt(
-                                password_input.value,
+                                prf_output
                             )
 
-                            if encryption_password_verify(password_input.value):
+                            if encryption_password_verify(prf_output):
                                 ui.navigate.to("/home")
                             else:
-                                ui.notify(
-                                    "Incorrect encryption passphrase.", color="negative"
+                                passkey_error.set_text(
+                                    "Passkey did not match the stored encryption key. "
+                                    "If you reset your passkey, please reset your encryption too."
                                 )
+                                passkey_error.visible = True
 
-                        else:
-                            ui.notify(
-                                "Please enter your encryption passphrase.",
-                                color="negative",
-                            )
+                        def help_passkey() -> None:
+                            with ui.dialog() as help_dialog:
+                                with ui.card():
+                                    ui.label("Help with passkey").classes("text-h6")
+                                    ui.label(
+                                        "Without the correct passkey, you cannot access your "
+                                        "encrypted files. You can reset your encryption — this "
+                                        "permanently deletes all previously encrypted files — "
+                                        "and then re-register a new passkey or set a passphrase."
+                                    ).classes("text-subtitle2").style("margin-bottom: 10px;")
+                                    with ui.row().classes("justify-between w-full"):
+                                        ui.button(
+                                            "Close", on_click=lambda: ui.navigate.to("/")
+                                        ).props("color=black").style("margin-top: 10px;")
+                                        ui.button(
+                                            "Reset Encryption",
+                                            on_click=lambda: reset_password(),
+                                        ).props("color=red").style("margin-top: 10px;")
+                                help_dialog.open()
 
-                    def help_password() -> None:
-                        with ui.dialog() as help_dialog:
-                            with ui.card():
-                                ui.label("Help with Encryption Passphrase").classes(
-                                    "text-h6"
-                                )
-                                ui.label(
-                                    "Without the correct passphrase, you will not be able to access your encrypted files. You can reset your passphrase but all your previously encrypted files will be permanently deleted."
-                                ).classes("text-subtitle2").style(
-                                    "margin-bottom: 10px;"
-                                )
-                                with ui.row().classes("justify-between w-full"):
-                                    ui.button(
-                                        "Close", on_click=lambda: ui.navigate.to("/")
-                                    ).props("color=black").style("margin-top: 10px;")
-                                    ui.button(
-                                        "Reset Passphrase",
-                                        on_click=lambda: reset_password(),
-                                    ).props("color=red").style("margin-top: 10px;")
-
-                            help_dialog.open()
-
-                    with ui.row().classes("justify-between w-full"):
                         ui.button(
                             "Unlock",
-                            on_click=verify_encryption_password,
-                        ).props(
-                            "color=black"
-                        ).style("margin-top: 10px;")
-                        ui.button("Help", on_click=help_password).props(
-                            "color=red"
-                        ).style("margin-top: 10px;")
-                dialog.open()
+                            icon="fingerprint",
+                            on_click=unlock_with_passkey,
+                        ).props("color=black").style("margin-top: 10px;")
+
+                        with ui.row().classes("justify-between w-full"):
+                            ui.button("Help", on_click=help_passkey).props(
+                                "color=red flat"
+                            ).style("margin-top: 10px;")
+
+                    dialog.open()
+
+            else:
+                # -----------------------------------------------------------
+                # Passphrase unlock flow (existing behaviour)
+                # -----------------------------------------------------------
+                with ui.dialog() as dialog:
+                    with ui.card():
+                        ui.label("Enter your encryption passphrase").classes("text-h6")
+                        password_input = ui.input(
+                            "Encryption Passphrase", password=True
+                        ).style("width: 100%; margin-bottom: 10px;")
+                        password_input.on(
+                            "keydown.enter", lambda e: verify_encryption_password()
+                        )
+                        password_input.props("autofocus")
+
+                        def verify_encryption_password() -> None:
+                            if password_input.value:
+                                app.storage.user["encryption_password"] = storage_encrypt(
+                                    password_input.value,
+                                )
+
+                                if encryption_password_verify(password_input.value):
+                                    ui.navigate.to("/home")
+                                else:
+                                    ui.notify(
+                                        "Incorrect encryption passphrase.", color="negative"
+                                    )
+
+                            else:
+                                ui.notify(
+                                    "Please enter your encryption passphrase.",
+                                    color="negative",
+                                )
+
+                        def help_password() -> None:
+                            with ui.dialog() as help_dialog:
+                                with ui.card():
+                                    ui.label("Help with Encryption Passphrase").classes(
+                                        "text-h6"
+                                    )
+                                    ui.label(
+                                        "Without the correct passphrase, you will not be able to access your encrypted files. You can reset your passphrase but all your previously encrypted files will be permanently deleted."
+                                    ).classes("text-subtitle2").style(
+                                        "margin-bottom: 10px;"
+                                    )
+                                    with ui.row().classes("justify-between w-full"):
+                                        ui.button(
+                                            "Close", on_click=lambda: ui.navigate.to("/")
+                                        ).props("color=black").style("margin-top: 10px;")
+                                        ui.button(
+                                            "Reset Passphrase",
+                                            on_click=lambda: reset_password(),
+                                        ).props("color=red").style("margin-top: 10px;")
+
+                                help_dialog.open()
+
+                        with ui.row().classes("justify-between w-full"):
+                            ui.button(
+                                "Unlock",
+                                on_click=verify_encryption_password,
+                            ).props(
+                                "color=black"
+                            ).style("margin-top: 10px;")
+                            ui.button("Help", on_click=help_password).props(
+                                "color=red"
+                            ).style("margin-top: 10px;")
+                    dialog.open()
 
     else:
         has_token = bool(
