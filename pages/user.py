@@ -24,6 +24,9 @@ from utils.helpers import (
     email_save,
     email_save_notifications,
     email_save_notifications_get,
+    get_webauthn_credentials,
+    reset_passkey,
+    reset_password,
 )
 from utils.settings import get_settings
 from utils.token import get_admin_status, get_user_data
@@ -310,3 +313,48 @@ def create() -> None:
                         weekly_report.tooltip(
                             "Get a weekly email with a summary of transcription usage."
                         )
+
+        # ── Security section (full width, below both columns) ──
+        ui.label("Security").classes("text-lg font-semibold mb-2 mt-4")
+        ui.separator()
+
+        has_webauthn = userdata.get("has_webauthn", False)
+
+        if has_webauthn:
+            credentials = get_webauthn_credentials()
+            with ui.column().classes("gap-2 mt-2 mb-2"):
+                for cred in credentials:
+                    name = cred.get("name") or "Unnamed passkey"
+                    created_raw = cred.get("created_at", "")
+                    created = created_raw[:10] if created_raw else "unknown date"
+                    with ui.row().classes("items-center gap-3"):
+                        ui.icon("key").style("font-size: 20px;")
+                        ui.label(name).classes("font-medium text-theme-primary").style(
+                            "min-width: 180px;"
+                        )
+                        ui.label(f"Registered {created}").classes(
+                            "text-sm text-theme-muted"
+                        )
+
+            ui.button(
+                "Reset passkey",
+                icon="delete",
+                on_click=reset_passkey,
+            ).props("color=red flat").style("margin-top: 8px;")
+        elif userdata.get("encryption_settings"):
+            with ui.column().classes("gap-2 mt-2 mb-2"):
+                with ui.row().classes("items-center gap-3"):
+                    ui.icon("lock").style("font-size: 20px;")
+                    ui.label("Encryption protected by passphrase.").classes(
+                        "text-theme-primary"
+                    )
+
+            ui.button(
+                "Reset passphrase",
+                icon="delete",
+                on_click=reset_password,
+            ).props("color=red flat").style("margin-top: 8px;")
+        else:
+            with ui.row().classes("items-center gap-3 mt-2"):
+                ui.icon("lock_open").style("font-size: 20px;")
+                ui.label("No encryption configured.").classes("text-theme-muted")

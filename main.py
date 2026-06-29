@@ -31,6 +31,7 @@ from utils.token import get_user_data, get_user_status, get_token_is_valid
 from utils.helpers import (
     encryption_password_set,
     encryption_password_verify,
+    reset_passkey,
     reset_password,
     storage_encrypt,
 )
@@ -447,8 +448,8 @@ async def index(request: Request) -> None:
                                             "Close", on_click=lambda: ui.navigate.to("/")
                                         ).props("color=black").style("margin-top: 10px;")
                                         ui.button(
-                                            "Reset Encryption",
-                                            on_click=lambda: reset_password(),
+                                            "Reset Passkey",
+                                            on_click=lambda: reset_passkey(),
                                         ).props("color=red").style("margin-top: 10px;")
                                 help_dialog.open()
 

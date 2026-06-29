@@ -170,6 +170,53 @@ def reset_password() -> None:
         dialog.open()
 
 
+def get_webauthn_credentials() -> list:
+    try:
+        response = httpx.get(
+            f"{settings.API_URL}/api/v1/me/webauthn",
+            headers=get_auth_header(),
+        )
+        response.raise_for_status()
+        return response.json().get("result", [])
+    except httpx.HTTPError:
+        return []
+
+
+def reset_passkey() -> None:
+    def do_reset():
+        try:
+            response = httpx.put(
+                f"{settings.API_URL}/api/v1/me",
+                headers=get_auth_header(),
+                json={"reset_password": True},
+            )
+            response.raise_for_status()
+            ui.notify(
+                "Passkey reset. All encrypted files have been removed.",
+                color="positive",
+            )
+            app.storage.user["encryption_password"] = None
+            ui.navigate.to("/")
+        except httpx.HTTPError:
+            ui.notify("Failed to reset passkey.", color="negative")
+
+    with ui.dialog() as dialog:
+        with ui.card():
+            ui.label("Reset passkey").classes("text-h6")
+            ui.label(
+                "This will delete your registered passkey and all encrypted files. "
+                "You will need to set up a new passkey or passphrase. This cannot be undone."
+            ).classes("text-subtitle2").style("margin-bottom: 10px;")
+            with ui.row().classes("justify-between w-full"):
+                ui.button("Cancel", on_click=dialog.close).props(
+                    "color=black flat"
+                ).style("margin-top: 10px;")
+                ui.button("Reset Passkey", on_click=lambda: (dialog.close(), do_reset())).props(
+                    "color=red"
+                ).style("margin-top: 10px;")
+    dialog.open()
+
+
 def export_customers_csv() -> None:
     """
     Export customers data as CSV.
