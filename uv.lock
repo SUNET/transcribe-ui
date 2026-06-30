@@ -882,14 +882,14 @@ wheels = [
 
 [[package]]
 name = "python-engineio"
-version = "4.12.2"
+version = "4.13.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "simple-websocket" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ba/0b/67295279b66835f9fa7a491650efcd78b20321c127036eef62c11a31e028/python_engineio-4.12.2.tar.gz", hash = "sha256:e7e712ffe1be1f6a05ee5f951e72d434854a32fcfc7f6e4d9d3cae24ec70defa", size = 91677, upload-time = "2025-06-04T19:22:18.789Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fb/a0/f75491f942184d9960b15e763270f765fe9f239745ca5f9e16289011aed4/python_engineio-4.13.3.tar.gz", hash = "sha256:572b7783e341fed21edbc7cea297ccd378dad79265fdde96aa4664420a7c06c9", size = 79734, upload-time = "2026-06-20T22:53:52.197Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/fa/df59acedf7bbb937f69174d00f921a7b93aa5a5f5c17d05296c814fff6fc/python_engineio-4.12.2-py3-none-any.whl", hash = "sha256:8218ab66950e179dfec4b4bbb30aecf3f5d86f5e58e6fc1aa7fde2c698b2804f", size = 59536, upload-time = "2025-06-04T19:22:16.916Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/96/82f6328e410515fab21d5602ba35b9377a47b5a141a0c1f9efa00ce21eb4/python_engineio-4.13.3-py3-none-any.whl", hash = "sha256:1f60ecaf1358190f0e26c48c578a60428dc02a8f1295bc3dbf53d1b31116821f", size = 59993, upload-time = "2026-06-20T22:53:50.775Z" },
 ]
 
 [[package]]
@@ -903,15 +903,15 @@ wheels = [
 
 [[package]]
 name = "python-socketio"
-version = "5.14.0"
+version = "5.16.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bidict" },
     { name = "python-engineio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ec/bf/bbc41facdb33a7f440a39f213e59202032106b42df4667a32ef4c9ffe604/python_socketio-5.14.0.tar.gz", hash = "sha256:d057737f658b3948392ff452a5c865c5ccc969859c37cf095a73393ce755f98e", size = 122099, upload-time = "2025-09-30T19:30:40.902Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/07/dd/6fd4112b941f7d39b8171b6ba17902609bd8fa2059c3812a3c29dade13e7/python_socketio-5.16.2.tar.gz", hash = "sha256:ad88c228d921646efa436c0a0df217e364ef30ec072df4041484e54d49c15989", size = 128011, upload-time = "2026-05-21T22:03:44.418Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/8d/f41abde5846c456b33f25e7fa71d8b8ad78785bb812ef0f2393cda2caaf2/python_socketio-5.14.0-py3-none-any.whl", hash = "sha256:7de5ad8a55efc33e17897f6cf91d20168d3d259f98c38d38e2940af83136d6f8", size = 78438, upload-time = "2025-09-30T19:30:39.134Z" },
+    { url = "https://files.pythonhosted.org/packages/72/dc/0decaf5da92a7a969374474025787102d811d42aed1d32191fa338620e15/python_socketio-5.16.2-py3-none-any.whl", hash = "sha256:bef2da3374fd533aed4297f57b4f6512b52aa51604cb0da2165f401291c5ca20", size = 82137, upload-time = "2026-05-21T22:03:42.616Z" },
 ]
 
 [package.optional-dependencies]
@@ -1102,7 +1102,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.1.1" },
     { name = "python-engineio", specifier = ">=4.12.2" },
     { name = "python-multipart", specifier = ">=0.0.22" },
-    { name = "python-socketio", specifier = ">=5.14.0" },
+    { name = "python-socketio", specifier = ">=5.16.2" },
     { name = "pytz", specifier = ">=2025.2" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "simple-websocket", specifier = ">=1.1.0" },
