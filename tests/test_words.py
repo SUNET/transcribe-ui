@@ -27,7 +27,7 @@ PAYLOAD = {
     "version": 1,
     "words": [
         {"t": "Hej", "s": 0.0, "e": 0.5, "c": 0.99},
-        {"t": "på", "s": 0.6, "e": 0.8, "c": 0.40},
+        {"t": "på", "s": 0.6, "e": 0.8, "c": 0.15},
         {"t": "dig", "s": 1.0, "e": 1.4, "c": 0.95},
         {"t": "idag", "s": 3.0, "e": 3.6, "c": 0.70},
     ],
@@ -137,7 +137,7 @@ class TestWordLookup:
     def test_caption_confidence_is_the_average(self, editor):
         editor.load_words(PAYLOAD)
 
-        expected = (0.99 + 0.40 + 0.95 + 0.70) / 4
+        expected = (0.99 + 0.15 + 0.95 + 0.70) / 4
 
         assert editor.caption_confidence(caption()) == pytest.approx(expected)
 
@@ -251,9 +251,22 @@ class TestConfidenceDisplay:
         html = editor.get_confidence_html(caption())
 
         assert "title=" not in html
-        assert 'data-confidence="40%"' in html
-        assert 'data-confidence="70%"' in html
-        assert 'aria-label="Confidence 40%"' in html
+        assert 'data-confidence="Low"' in html
+        assert 'data-confidence="Medium"' in html
+        assert 'aria-label="Confidence: Low"' in html
+
+    def test_no_raw_score_is_shown(self, editor):
+        """
+        The score is not a calibrated probability, so it is never surfaced as
+        a number anywhere in the caption markup.
+        """
+
+        editor.load_words(PAYLOAD)
+
+        html = editor.get_confidence_html(caption())
+
+        assert "%" not in html
+        assert "0.15" not in html and "0.7" not in html
 
     def test_no_markup_when_every_word_is_confident(self, editor):
         editor.load_words(
@@ -286,9 +299,9 @@ class TestConfidenceDisplay:
         "score,expected",
         [
             (None, ""),
-            (0.30, "confidence-low"),
-            (0.70, "confidence-medium"),
-            (0.99, "confidence-high"),
+            (0.10, "confidence-low"),
+            (0.50, "confidence-medium"),
+            (0.90, "confidence-high"),
         ],
     )
     def test_confidence_class(self, score, expected):
@@ -296,10 +309,29 @@ class TestConfidenceDisplay:
 
     @pytest.mark.parametrize(
         "score,expected",
-        [(None, ""), (0.30, "low"), (0.70, "medium"), (0.99, "high")],
+        [(None, ""), (0.10, "low"), (0.50, "medium"), (0.90, "high")],
     )
     def test_confidence_level(self, score, expected):
         assert SRTEditor.confidence_level(score) == expected
+
+    @pytest.mark.parametrize(
+        "score,expected",
+        [(None, ""), (0.10, "Low"), (0.50, "Medium"), (0.90, "High")],
+    )
+    def test_confidence_label(self, score, expected):
+        assert SRTEditor.confidence_label(score) == expected
+
+    def test_label_follows_the_configured_thresholds(self, monkeypatch):
+        """
+        The bands are settings, so the label must move with them rather than
+        being pinned to the defaults.
+        """
+
+        from utils import srt as srt_module
+
+        monkeypatch.setattr(srt_module.settings, "CONFIDENCE_MEDIUM", 0.95)
+
+        assert SRTEditor.confidence_label(0.90) == "Medium"
 
     def test_chip_and_word_classes_do_not_collide(self):
         """
@@ -307,7 +339,7 @@ class TestConfidenceDisplay:
         two must never share a class name.
         """
 
-        for score in (0.30, 0.70, 0.99):
+        for score in (0.10, 0.50, 0.90):
             word_class = SRTEditor.confidence_class(score)
             chip_class = f"confidence-chip-{SRTEditor.confidence_level(score)}"
 

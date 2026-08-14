@@ -36,6 +36,12 @@ from utils.undo_redo import UndoRedoManager
 # speak a version the code does not implement would only mis-parse silently.
 WORDS_FORMAT_VERSION = 1
 
+# What each severity band is called in the editor. The band is shown instead
+# of the raw score: the model's confidence is not a calibrated probability, so
+# a percentage reads as odds it cannot back up, and its absolute value shifts
+# between models and languages.
+CONFIDENCE_LABELS = {"low": "Low", "medium": "Medium", "high": "High"}
+
 settings = get_settings()
 
 
@@ -678,6 +684,14 @@ class SRTEditor:
         return "high"
 
     @classmethod
+    def confidence_label(cls, score: Optional[float]) -> str:
+        """
+        What to show the user for a confidence score, or "" when unscored.
+        """
+
+        return CONFIDENCE_LABELS.get(cls.confidence_level(score), "")
+
+    @classmethod
     def confidence_class(cls, score: Optional[float]) -> str:
         """
         CSS class for an uncertain word marked inline in the caption text.
@@ -720,15 +734,15 @@ class SRTEditor:
                 continue
 
             marked = True
-            percentage = f"{score:.0%}"
+            label = self.confidence_label(score)
 
-            # The score rides on a data attribute rather than title=, so the
+            # The band rides on a data attribute rather than title=, so the
             # tooltip is a CSS box we can colour by severity. aria-label keeps
-            # the score reachable for screen readers, which title= provided.
+            # it reachable for screen readers, which title= provided.
             parts.append(
                 f'<span class="confidence-word {self.confidence_class(score)}" '
-                f'data-confidence="{percentage}" '
-                f'aria-label="Confidence {percentage}">{html_escape(token)}</span>'
+                f'data-confidence="{label}" '
+                f'aria-label="Confidence: {label}">{html_escape(token)}</span>'
             )
 
         return "".join(parts) if marked else None
@@ -750,7 +764,7 @@ class SRTEditor:
         # A plain label rather than ui.badge(): the badge carries Quasar's
         # color="primary" prop, which paints it in the theme's blue and has to
         # be fought off with !important overrides on every property.
-        chip = ui.label(f"{score:.0%}").classes(
+        chip = ui.label(self.confidence_label(score)).classes(
             f"confidence-chip confidence-chip-{self.confidence_level(score)}"
         )
 
