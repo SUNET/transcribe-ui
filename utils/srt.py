@@ -15,10 +15,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import bisect
 import httpx
 import json
 import re
 
+from html import escape as html_escape
 from nicegui import events, ui
 from typing import Callable, List, Optional
 from utils.caption import SRTCaption
@@ -28,8 +30,11 @@ from utils.settings import get_settings
 from utils.styles import default_styles
 from utils.undo_redo import UndoRedoManager
 
-CHARACTER_LIMIT_EXCEEDED_COLOR = "text-red"
-CHARACTER_LIMIT = 42
+# Version of the word timing payload this editor understands. A wire format
+# constant, deliberately not a setting: anything with a different version is
+# treated as absent rather than guessed at, and letting a deployment claim to
+# speak a version the code does not implement would only mis-parse silently.
+WORDS_FORMAT_VERSION = 1
 
 settings = get_settings()
 
@@ -58,6 +63,13 @@ class SRTEditor:
         self.speakers = set()
         self.data_format = None
         self.filename = filename
+
+        # Per-word timings, empty for results produced before they existed.
+        self.words: List[dict] = []
+        self.__word_midpoints: List[float] = []
+        self.has_confidence = False
+        self.show_confidence = False
+        self.__active_text_area = None
 
         # Initialize undo/redo manager
         self.undo_redo_manager = UndoRedoManager()
@@ -305,7 +317,7 @@ class SRTEditor:
         """
         self.autoscroll = autoscroll
 
-    def handle_key_event(self, event: events.KeyEventArguments) -> None:
+    async def handle_key_event(self, event: events.KeyEventArguments) -> None:
         # Only handle keydown events, not keyup to prevent double-firing
         if not event.action.keydown:
             return
@@ -319,11 +331,11 @@ class SRTEditor:
             case "ArrowUp" if event.modifiers.alt and not event.modifiers.shift and not event.modifiers.ctrl and not event.modifiers.meta:
                 self.select_prev_caption()
 
-            # Split block, Ctrl/⌘+Enter
+            # Split block at the cursor, Ctrl/⌘+Enter
             case "Enter" if event.modifiers.ctrl and not event.modifiers.shift and not event.modifiers.alt and not event.modifiers.meta:
-                self.split_caption(self.selected_caption)
+                await self.split_caption_at_cursor(self.selected_caption)
             case "Enter" if event.modifiers.meta and not event.modifiers.shift and not event.modifiers.alt and not event.modifiers.ctrl:
-                self.split_caption(self.selected_caption)
+                await self.split_caption_at_cursor(self.selected_caption)
 
             # Merge block with next, Ctrl+M
             case "m" if event.modifiers.ctrl:
@@ -534,6 +546,216 @@ class SRTEditor:
                 self.speakers.add(seg["speaker"])
 
         self.renumber_captions()
+
+    def load_words(self, payload) -> None:
+        """
+        Load the per-word timing payload returned by the backend.
+
+        Anything unrecognised is discarded silently: word data is an optional
+        enhancement, and an editor that cannot read it must still open the
+        transcription normally.
+        """
+
+        self.words = []
+        self.__word_midpoints = []
+        self.has_confidence = False
+
+        if not payload:
+            return
+
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (ValueError, TypeError):
+                return
+
+        if not isinstance(payload, dict):
+            return
+
+        if payload.get("version") != WORDS_FORMAT_VERSION:
+            return
+
+        words = payload.get("words")
+
+        if not isinstance(words, list):
+            return
+
+        loaded = []
+
+        for word in words:
+            if not isinstance(word, dict):
+                continue
+
+            text = word.get("t")
+            start = word.get("s")
+            end = word.get("e")
+
+            if not text or start is None or end is None:
+                continue
+
+            try:
+                entry = {"t": str(text), "s": float(start), "e": float(end)}
+            except (TypeError, ValueError):
+                continue
+
+            confidence = word.get("c")
+
+            if confidence is not None:
+                try:
+                    entry["c"] = float(confidence)
+                    self.has_confidence = True
+                except (TypeError, ValueError):
+                    pass
+
+            loaded.append(entry)
+
+        loaded.sort(key=lambda word: word["s"])
+
+        self.words = loaded
+        self.__word_midpoints = [(word["s"] + word["e"]) / 2 for word in loaded]
+
+    def words_in_range(self, start: float, end: float) -> List[dict]:
+        """
+        Words spoken inside a time range, matched on their midpoint so a word
+        straddling a caption boundary belongs to exactly one caption.
+        """
+
+        if not self.words or end < start:
+            return []
+
+        first = bisect.bisect_left(self.__word_midpoints, start)
+        last = bisect.bisect_right(self.__word_midpoints, end)
+
+        return self.words[first:last]
+
+    def caption_words(self, caption: SRTCaption) -> List[dict]:
+        """
+        Words belonging to a caption.
+        """
+
+        if not caption:
+            return []
+
+        return self.words_in_range(
+            caption.get_start_seconds(), caption.get_end_seconds()
+        )
+
+    def caption_confidence(self, caption: SRTCaption) -> Optional[float]:
+        """
+        Average confidence across a caption's words, or None when the result
+        carries no confidence data.
+        """
+
+        scores = [word["c"] for word in self.caption_words(caption) if "c" in word]
+
+        if not scores:
+            return None
+
+        return sum(scores) / len(scores)
+
+    def set_show_confidence(self, show: bool) -> None:
+        """
+        Toggle the confidence display on the caption list.
+        """
+
+        self.show_confidence = bool(show)
+        self.refresh_display(force_full_refresh=True)
+
+    @staticmethod
+    def confidence_level(score: Optional[float]) -> str:
+        """
+        Severity band for a confidence score: "low", "medium", "high", or ""
+        when there is no score.
+        """
+
+        if score is None:
+            return ""
+        if score < settings.CONFIDENCE_LOW:
+            return "low"
+        if score < settings.CONFIDENCE_MEDIUM:
+            return "medium"
+
+        return "high"
+
+    @classmethod
+    def confidence_class(cls, score: Optional[float]) -> str:
+        """
+        CSS class for an uncertain word marked inline in the caption text.
+        """
+
+        level = cls.confidence_level(score)
+
+        return f"confidence-{level}" if level else ""
+
+    def get_confidence_html(self, caption: SRTCaption) -> Optional[str]:
+        """
+        Caption text with the words the model was unsure about marked up.
+
+        Words are matched to the caption positionally within the caption's own
+        time range, so an edit only ever throws off the caption it was made in.
+        Returns None when there is nothing worth marking up.
+        """
+
+        words = [word for word in self.caption_words(caption) if "c" in word]
+
+        if not words:
+            return None
+
+        # Keep the separators so line breaks and spacing survive the round trip.
+        tokens = re.split(r"(\s+)", caption.text)
+        marked = False
+        parts = []
+        index = 0
+
+        for token in tokens:
+            if not token.strip():
+                parts.append(html_escape(token).replace("\n", "<br>"))
+                continue
+
+            score = words[index]["c"] if index < len(words) else None
+            index += 1
+
+            if score is None or score >= settings.CONFIDENCE_MEDIUM:
+                parts.append(html_escape(token))
+                continue
+
+            marked = True
+            percentage = f"{score:.0%}"
+
+            # The score rides on a data attribute rather than title=, so the
+            # tooltip is a CSS box we can colour by severity. aria-label keeps
+            # the score reachable for screen readers, which title= provided.
+            parts.append(
+                f'<span class="confidence-word {self.confidence_class(score)}" '
+                f'data-confidence="{percentage}" '
+                f'aria-label="Confidence {percentage}">{html_escape(token)}</span>'
+            )
+
+        return "".join(parts) if marked else None
+
+    def create_confidence_badge(self, caption: SRTCaption) -> None:
+        """
+        Render the caption's average confidence, when the toggle is on and the
+        caption has scored words.
+        """
+
+        if not self.show_confidence:
+            return
+
+        score = self.caption_confidence(caption)
+
+        if score is None:
+            return
+
+        # A plain label rather than ui.badge(): the badge carries Quasar's
+        # color="primary" prop, which paints it in the theme's blue and has to
+        # be fought off with !important overrides on every property.
+        chip = ui.label(f"{score:.0%}").classes(
+            f"confidence-chip confidence-chip-{self.confidence_level(score)}"
+        )
+
+        with chip:
+            ui.tooltip("Average word confidence for this block.")
 
     def parse_srt(self, srt_content: str) -> None:
         """
@@ -912,9 +1134,127 @@ class SRTEditor:
 
         return highlighted
 
-    def split_caption(self, caption: SRTCaption) -> None:
+    async def read_text_area_state(self) -> Optional[dict]:
+        """
+        Read the live value and caret offset out of the caption text area.
+
+        Returns None whenever the caret cannot be determined -- no text area
+        open, the browser did not answer in time, or an unexpected payload --
+        so callers fall back to splitting without a caret.
+        """
+
+        text_area = self.__active_text_area
+
+        if text_area is None:
+            return None
+
+        try:
+            state = await ui.run_javascript(
+                f"""
+                (() => {{
+                    const root = getHtmlElement({text_area.id})
+                        || getElement({text_area.id})?.$el;
+                    if (!root || !root.querySelector) return null;
+                    const el = root.matches("textarea")
+                        ? root
+                        : root.querySelector("textarea");
+                    if (!el) return null;
+                    return {{value: el.value, pos: el.selectionStart}};
+                }})()
+                """,
+                timeout=2.0,
+            )
+        except Exception:
+            return None
+
+        if not isinstance(state, dict):
+            return None
+
+        value = state.get("value")
+        position = state.get("pos")
+
+        if not isinstance(value, str) or not isinstance(position, int):
+            return None
+
+        return {"value": value, "position": position}
+
+    async def split_caption_at_cursor(self, caption: SRTCaption) -> None:
+        """
+        Split a caption where the caret sits, falling back to a halfway split
+        when the caret position is unavailable.
+        """
+
+        if not caption:
+            return
+
+        state = await self.read_text_area_state()
+
+        if state is None:
+            self.split_caption(caption)
+            return
+
+        self.split_caption(
+            caption, cursor_position=state["position"], text=state["value"]
+        )
+
+    def split_time(
+        self,
+        caption: SRTCaption,
+        first_part: str,
+        second_part: str,
+        at_cursor: bool = False,
+    ) -> float:
+        """
+        Timestamp to cut a caption at, best source first:
+
+        1. the silence between the last word of the first half and the first
+           word of the second half, when per-word timings are available,
+        2. the split point's position through the text, scaled over the
+           caption's duration -- only for a caret-driven split, where the two
+           halves are usually uneven,
+        3. the middle of the caption, which is what an unaided split has
+           always done.
+        """
+
+        start_seconds = caption.get_start_seconds()
+        end_seconds = caption.get_end_seconds()
+        duration = end_seconds - start_seconds
+
+        if duration <= 0:
+            return end_seconds
+
+        words = self.caption_words(caption)
+        offset = len(first_part.split())
+
+        if words and 0 < offset < len(words):
+            boundary = (words[offset - 1]["e"] + words[offset]["s"]) / 2
+
+            if start_seconds < boundary < end_seconds:
+                return boundary
+
+        if at_cursor:
+            first_length = len(first_part.strip())
+            total_length = first_length + len(second_part.strip())
+
+            if total_length > 0:
+                proportional = start_seconds + duration * (first_length / total_length)
+
+                if start_seconds < proportional < end_seconds:
+                    return proportional
+
+        return start_seconds + duration / 2
+
+    def split_caption(
+        self,
+        caption: SRTCaption,
+        cursor_position: Optional[int] = None,
+        text: Optional[str] = None,
+    ) -> None:
         """
         Split a caption into two parts.
+
+        Splits at ``cursor_position`` when given and it falls inside the text,
+        otherwise halfway through as before.
         """
 
         if not caption:
@@ -923,30 +1263,49 @@ class SRTEditor:
         # Save state before making changes
         self.save_state_for_undo()
 
-        text_lines = caption.text.split("\n")
+        if text is not None and text != caption.text:
+            # The text area holds edits that have not been committed yet;
+            # splitting must not discard them.
+            caption.text = text
+            self.mark_as_changed()
 
-        if len(text_lines) == 1:
-            # Split single line in half
-            text = caption.text
-            mid_point = len(text) // 2
-            # Find nearest space to split at
-            while mid_point > 0 and text[mid_point] != " ":
-                mid_point -= 1
-            if mid_point == 0:
+        first_part = None
+        second_part = None
+        at_cursor = False
+
+        if cursor_position is not None and 0 < cursor_position < len(caption.text):
+            head = caption.text[:cursor_position].strip()
+            tail = caption.text[cursor_position:].strip()
+
+            if head and tail:
+                first_part = head
+                second_part = tail
+                at_cursor = True
+
+        if first_part is None:
+            text_lines = caption.text.split("\n")
+
+            if len(text_lines) == 1:
+                # Split single line in half
+                text = caption.text
                 mid_point = len(text) // 2
+                # Find nearest space to split at
+                while mid_point > 0 and text[mid_point] != " ":
+                    mid_point -= 1
+                if mid_point == 0:
+                    mid_point = len(text) // 2
 
-            first_part = text[:mid_point].strip()
-            second_part = text[mid_point:].strip()
-        else:
-            # Split at middle line
-            mid_line = len(text_lines) // 2
-            first_part = "\n".join(text_lines[:mid_line])
-            second_part = "\n".join(text_lines[mid_line:])
+                first_part = text[:mid_point].strip()
+                second_part = text[mid_point:].strip()
+            else:
+                # Split at middle line
+                mid_line = len(text_lines) // 2
+                first_part = "\n".join(text_lines[:mid_line])
+                second_part = "\n".join(text_lines[mid_line:])
 
         # Calculate time split
-        start_seconds = caption.get_start_seconds()
         end_seconds = caption.get_end_seconds()
-        mid_seconds = (start_seconds + end_seconds) / 2
+        mid_seconds = self.split_time(caption, first_part, second_part, at_cursor)
 
         # Update first caption
         caption.text = first_part
@@ -1332,9 +1691,11 @@ class SRTEditor:
                 if caption.is_selected:
                     with ui.row().classes("w-full justify-between") as action_row:
                         action_row.props("id=action_row")
-                        ui.label(f"#{caption.index}").classes(
-                            "font-bold text-sm text-theme-muted"
-                        )
+                        with ui.row().classes("items-center gap-2"):
+                            ui.label(f"#{caption.index}").classes(
+                                "font-bold text-sm text-theme-muted"
+                            )
+                            self.create_confidence_badge(caption)
 
                         if self.data_format == "txt":
                             self.speakers.add(caption.speaker)
@@ -1378,13 +1739,20 @@ class SRTEditor:
                         lambda e: self.update_caption_text(caption, e.sender.value),
                     )
 
+                    # Only one caption is open at a time, so this is the text
+                    # area the caret lives in when splitting.
+                    self.__active_text_area = text_area
+
                     # Action buttons
                     with ui.row().classes("w-full justify-between"):
-                        ui.button("Split", icon="call_split").props(
+                        split_button = ui.button("Split", icon="call_split").props(
                             "flat dense"
-                        ).classes("editor-btn editor-caption-btn").on(
-                            "click", lambda: self.split_caption(caption)
+                        ).classes("editor-btn editor-caption-btn")
+                        split_button.on(
+                            "click", lambda: self.split_caption_at_cursor(caption)
                         )
+                        with split_button:
+                            ui.tooltip("Split at the cursor (Ctrl/⌘ + Enter)")
                         ui.button("Merge prev", icon="merge_type").props(
                             "flat dense"
                         ).classes("editor-btn editor-caption-btn").on(
@@ -1439,6 +1807,7 @@ class SRTEditor:
                                 ui.label(f"{caption.speaker}:").classes(
                                     "font-bold text-sm"
                                 )
+                            self.create_confidence_badge(caption)
                         ui.label(f"{caption.start_time} - {caption.end_time}").classes(
                             "text-sm text-theme-muted"
                         )
@@ -1457,19 +1826,32 @@ class SRTEditor:
                                     ui.label(f"{caption. speaker}:").classes(
                                         "font-bold text-sm"
                                     )
-                            ui.label(
-                                f"{caption.start_time} - {caption.end_time}"
-                            ).classes("text-sm text-theme-muted")
+                            with ui.row().classes("items-center gap-2"):
+                                self.create_confidence_badge(caption)
+                                ui.label(
+                                    f"{caption.start_time} - {caption.end_time}"
+                                ).classes("text-sm text-theme-muted")
                         with ui.row().classes("w-full justify-between items-end"):
-                            ui.label(caption.text).classes(
-                                "text-sm leading-relaxed whitespace-pre-wrap"
+                            confidence_html = (
+                                self.get_confidence_html(caption)
+                                if self.show_confidence
+                                else None
                             )
+
+                            if confidence_html:
+                                ui.html(confidence_html, sanitize=False).classes(
+                                    "text-sm leading-relaxed whitespace-pre-wrap"
+                                )
+                            else:
+                                ui.label(caption.text).classes(
+                                    "text-sm leading-relaxed whitespace-pre-wrap"
+                                )
                             text_color = "text-theme-muted"
 
                             tooltip_text = (
                                 "Character count."
                                 if self.data_format == "txt"
-                                else "Character count.  Max 42 per line (guideline)."
+                                else f"Character count.  Max {settings.CHARACTER_LIMIT} per line (guideline)."
                             )
 
                             lines = caption.text.split("\n")
@@ -1477,11 +1859,11 @@ class SRTEditor:
 
                             # Check for exceeded limit
                             exceeded = self.data_format != "txt" and any(
-                                len(x) > CHARACTER_LIMIT for x in lines
+                                len(x) > settings.CHARACTER_LIMIT for x in lines
                             )
                             if exceeded:
-                                text_color = CHARACTER_LIMIT_EXCEEDED_COLOR
-                                tooltip_text = f"Character limit of {CHARACTER_LIMIT} exceeded in one or more lines."
+                                text_color = settings.CHARACTER_LIMIT_EXCEEDED_COLOR
+                                tooltip_text = f"Character limit of {settings.CHARACTER_LIMIT} exceeded in one or more lines."
 
                             character_label = "/".join(line_lengths)
 
@@ -1583,9 +1965,11 @@ class SRTEditor:
             if caption.is_selected:
                 with ui.row().classes("w-full justify-between") as action_row:
                     action_row.props("id=action_row")
-                    ui.label(f"#{caption.index}").classes(
-                        "font-bold text-sm text-theme-muted"
-                    )
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label(f"#{caption.index}").classes(
+                            "font-bold text-sm text-theme-muted"
+                        )
+                        self.create_confidence_badge(caption)
 
                     if self.data_format == "txt":
                         speaker_select = ui.select(
@@ -1627,10 +2011,17 @@ class SRTEditor:
                     "blur", lambda e: self.update_caption_text(caption, e.sender.value)
                 )
 
+                self.__active_text_area = text_area
+
                 with ui.row().classes("w-full justify-between"):
-                    ui.button("Split", icon="call_split").props("flat dense").classes(
-                        "editor-btn editor-caption-btn"
-                    ).on("click", lambda: self.split_caption(caption))
+                    split_button = ui.button("Split", icon="call_split").props(
+                        "flat dense"
+                    ).classes("editor-btn editor-caption-btn")
+                    split_button.on(
+                        "click", lambda: self.split_caption_at_cursor(caption)
+                    )
+                    with split_button:
+                        ui.tooltip("Split at the cursor (Ctrl/⌘ + Enter)")
                     ui.button("Merge prev", icon="merge_type").props(
                         "flat dense"
                     ).classes("editor-btn editor-caption-btn").on(
@@ -1679,6 +2070,7 @@ class SRTEditor:
 
                         if self.data_format == "txt":
                             ui.label(f"{caption.speaker}:").classes("font-bold text-sm")
+                        self.create_confidence_badge(caption)
                     ui.label(f"{caption.start_time} - {caption.end_time}").classes(
                         "text-sm text-theme-muted"
                     )
@@ -1695,19 +2087,32 @@ class SRTEditor:
                                 ui.label(f"{caption. speaker}:").classes(
                                     "font-bold text-sm"
                                 )
-                        ui.label(f"{caption.start_time} - {caption.end_time}").classes(
-                            "text-sm text-theme-muted"
-                        )
+                        with ui.row().classes("items-center gap-2"):
+                            self.create_confidence_badge(caption)
+                            ui.label(
+                                f"{caption.start_time} - {caption.end_time}"
+                            ).classes("text-sm text-theme-muted")
                     with ui.row().classes("w-full justify-between items-end"):
-                        ui.label(caption.text).classes(
-                            "text-sm leading-relaxed whitespace-pre-wrap"
+                        confidence_html = (
+                            self.get_confidence_html(caption)
+                            if self.show_confidence
+                            else None
                         )
+
+                        if confidence_html:
+                            ui.html(confidence_html, sanitize=False).classes(
+                                "text-sm leading-relaxed whitespace-pre-wrap"
+                            )
+                        else:
+                            ui.label(caption.text).classes(
+                                "text-sm leading-relaxed whitespace-pre-wrap"
+                            )
                         text_color = "text-theme-muted"
 
                         tooltip_text = (
                             "Character count."
                             if self.data_format == "txt"
-                            else "Character count.  Max 42 per line (guideline)."
+                            else f"Character count.  Max {settings.CHARACTER_LIMIT} per line (guideline)."
                         )
 
                         lines = caption.text.split("\n")
@@ -1715,11 +2120,11 @@ class SRTEditor:
 
                         # Check for exceeded limit
                         exceeded = self.data_format != "txt" and any(
-                            len(x) > CHARACTER_LIMIT for x in lines
+                            len(x) > settings.CHARACTER_LIMIT for x in lines
                         )
                         if exceeded:
-                            text_color = CHARACTER_LIMIT_EXCEEDED_COLOR
-                            tooltip_text = f"Character limit of {CHARACTER_LIMIT} exceeded in one or more lines."
+                            text_color = settings.CHARACTER_LIMIT_EXCEEDED_COLOR
+                            tooltip_text = f"Character limit of {settings.CHARACTER_LIMIT} exceeded in one or more lines."
 
                         character_label = "/".join(line_lengths)
 
@@ -1769,9 +2174,9 @@ class SRTEditor:
             # Check character limit per line (only for SRT format)
             if self.data_format == "srt":
                 for line in caption.text.split("\n"):
-                    if len(line) > CHARACTER_LIMIT:
+                    if len(line) > settings.CHARACTER_LIMIT:
                         errors.append(
-                            f"Caption #{caption.index} has a line with {len(line)} characters (max {CHARACTER_LIMIT})."
+                            f"Caption #{caption.index} has a line with {len(line)} characters (max {settings.CHARACTER_LIMIT})."
                         )
                         caption.is_valid = False
                         if caption not in errorenous_captions:
@@ -1927,7 +2332,7 @@ class SRTEditor:
             (
                 "Editing",
                 [
-                    ("Split caption", "Ctrl/⌘ + Enter"),
+                    ("Split caption at cursor", "Ctrl/⌘ + Enter"),
                     ("Merge with next", "Ctrl + M"),
                     ("Merge with previous", "Ctrl + Shift + M"),
                     ("Add caption after", "Ctrl/⌘ + Shift + Enter"),

@@ -48,6 +48,19 @@ class Settings(BaseSettings):
     LANDING_TEXT: str = "Welcome to Sunet Scribe"
     MANUAL_URL: str = "https://sunet.box.com/s/la16r5iu3gkm5n149mzmth9yiaulx3ub"
 
+    # Subtitle line length guideline. Lines longer than this are flagged in
+    # the editor and reported by "Validate"; nothing is truncated.
+    CHARACTER_LIMIT: int = 42
+    CHARACTER_LIMIT_EXCEEDED_COLOR: str = "text-red"
+
+    # Word confidence thresholds. Below CONFIDENCE_LOW a word is flagged as
+    # likely wrong, below CONFIDENCE_MEDIUM as uncertain; above that the model
+    # is reliable enough that marking it up is only noise. Worth retuning if
+    # you change transcription models -- what counts as a low score differs
+    # between them.
+    CONFIDENCE_LOW: float = 0.60
+    CONFIDENCE_MEDIUM: float = 0.85
+
     WHISPER_MODELS: list[str] = [
         "Fast transcription (normal accuracy)",
         "Slower transcription (higher accuracy)",

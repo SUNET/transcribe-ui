@@ -38,7 +38,6 @@ from utils.helpers import (
     dark_mode_save,
     sanitize_filename,
 )
-from utils.srt import SRTEditor
 from utils.styles import (
     default_styles,
     menu_active_style,
@@ -1405,6 +1404,11 @@ def table_bulk_export(table: ui.table) -> None:
     progress_dialog.open()
 
     async def fetch_and_show():
+        # Imported here rather than at module scope: utils.srt imports back
+        # into this module, and importing utils.srt first would otherwise hit
+        # a half-initialised utils.common.
+        from utils.srt import SRTEditor
+
         editors = []
         for i, row in enumerate(completed):
             uuid = row["uuid"]

@@ -74,6 +74,20 @@ This app holds session tokens, user PII, and an encryption password that gates b
 - `Dockerfile` should not run as root in production; pin base image and pip-installed versions.
 - Dependencies are tracked in `pyproject.toml` / `uv.lock`. Run `uv lock --upgrade` deliberately, review the diff, and prefer libraries from the "secure-by-default" list (Bleach, defusedxml, Tink) over hand-rolled equivalents.
 
+## Word timings (`utils/srt.py`)
+
+`SRTEditor.load_words()` takes the optional payload from `GET /api/v1/transcriber/{uuid}/words`:
+
+```json
+{"version": 1, "words": [{"t": "Hej", "s": 0.12, "e": 0.34, "c": 0.98}]}
+```
+
+- Anything with a different `version`, or an unparseable payload, is discarded — the editor must open normally without word data. Jobs transcribed before word timings existed have none.
+- Words are flat and time-ordered, not tied to segments. `caption_words()` maps them onto a caption by time range (bisect on precomputed midpoints), so they survive splits, merges and renumbering. Never key word data by caption index.
+- `split_caption(caption, cursor_position=..., text=...)` cuts at the caret and picks the timestamp from the silence between the two adjacent words. Without word data a caret split falls back to proportional; **a split with no caret must keep halving the caption**, which is what results predating this feature rely on.
+- `c` is absent when the worker ran with `WORD_CONFIDENCE=false`. Gate any confidence UI on `editor.has_confidence`, not on the presence of `words`.
+- Confidence markup goes through `get_confidence_html()`, which HTML-escapes every token. Do not build caption markup inline.
+
 ## Settings
 
 `utils/settings.py` `Settings` (pydantic `BaseSettings`, loaded from `.env`):
@@ -82,6 +96,9 @@ This app holds session tokens, user PII, and an encryption password that gates b
 - `STORAGE_SECRET` — keys AES-256-GCM encryption for browser storage
 - Branding: `LOGO_*`, `FAVICON`, `TAB_TITLE`, `TOPBAR_TEXT`, `LANDING_TEXT`, `MANUAL_URL`
 - `WHISPER_MODELS`, `WHISPER_LANGUAGES` (includes "Northern Sámi (Experimental)")
+- Editor: `CHARACTER_LIMIT` (must match `SUBTITLE_LINE_LENGTH` in transcribe-worker — the worker wraps at it, the editor flags lines that exceed it), `CHARACTER_LIMIT_EXCEEDED_COLOR`, `CONFIDENCE_LOW`, `CONFIDENCE_MEDIUM`
+
+Tunables belong here; wire-format constants do not. `WORDS_FORMAT_VERSION` in `utils/srt.py` stays in code — a deployment claiming a version the code does not implement would only mis-parse silently.
 
 Access via `get_settings()` (cached).
 

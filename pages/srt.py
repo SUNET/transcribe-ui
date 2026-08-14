@@ -147,6 +147,24 @@ def create() -> None:
             ui.notify(f"Error: Failed to get result: {e}")
             return
 
+        # Per-word timings are optional: jobs transcribed before they existed
+        # simply have none, and the editor stays fully usable without them.
+        try:
+            words_response = httpx.request(
+                "GET",
+                f"{settings.API_URL}/api/v1/transcriber/{uuid}/words",
+                headers=get_auth_header(),
+                json={
+                    "encryption_password": storage_decrypt(
+                        app.storage.user.get("encryption_password"),
+                    )
+                },
+            )
+            words_response.raise_for_status()
+            editor.load_words(words_response.json().get("result"))
+        except (httpx.HTTPError, ValueError):
+            editor.load_words(None)
+
         with ui.row().classes("justify-between w-full gap-2"):
             with ui.column().classes("flex-row items-center"):
                 editor.create_undo_redo_panel()
@@ -200,10 +218,26 @@ def create() -> None:
                             "timeupdate",
                             lambda: editor.select_caption_from_video(),
                         )
-                        autoscroll = ui.switch("Autoscroll")
-                        autoscroll.on(
-                            "click", lambda: editor.set_autoscroll(autoscroll.value)
-                        )
+                        with ui.row().classes("items-center gap-4"):
+                            autoscroll = ui.switch("Autoscroll")
+                            autoscroll.on(
+                                "click", lambda: editor.set_autoscroll(autoscroll.value)
+                            )
+
+                            # Only offered when the result carries confidence
+                            # scores; older jobs have none to show.
+                            if editor.has_confidence:
+                                confidence_switch = ui.switch("Confidence")
+                                confidence_switch.on(
+                                    "click",
+                                    lambda: editor.set_show_confidence(
+                                        confidence_switch.value
+                                    ),
+                                )
+                                with confidence_switch:
+                                    ui.tooltip(
+                                        "Mark how sure the model was about each word."
+                                    )
                         with ui.column().classes("srt-info-panel p-4 w-full"):
                             ui.label(filename).classes("text-h6").style(
                                 "align-self: center;"
