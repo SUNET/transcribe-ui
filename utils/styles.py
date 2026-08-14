@@ -738,10 +738,14 @@ theme_styles = """
     .review-accepted {
         position: relative;
         cursor: pointer;
-        border-bottom: 1px dotted var(--color-border-subtle);
+        /* The review colour rather than a grey hairline, so a confirmed word
+           stays easy to pick out and take back. Dotted and unfilled keeps it
+           clearly below an active flag in the hierarchy. */
+        border-bottom: 2px dotted var(--color-review-accent);
+        padding-bottom: 1px;
     }
     .review-accepted:hover {
-        border-bottom-color: var(--color-review-accent);
+        border-bottom-style: solid;
     }
 
     .review-word {
