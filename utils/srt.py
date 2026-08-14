@@ -46,12 +46,25 @@ REVIEW_SENSITIVITIES = ("low", "medium", "high")
 DEFAULT_REVIEW_SENSITIVITY = "low"
 
 REVIEW_TOOLTIP = "This word may need review"
+ACCEPTED_TOOLTIP = "Marked correct \u2014 click to flag it again"
 
 # Where the review preferences live in app.storage.user, so a reload does not
 # reset them. Plain values: they are display preferences, not secrets, so they
 # do not go through storage_encrypt the way tokens and passwords do.
 REVIEW_SHOW_KEY = "srt_show_uncertain_words"
 REVIEW_SENSITIVITY_KEY = "srt_review_sensitivity"
+AUTOSCROLL_KEY = "srt_autoscroll"
+
+
+def accepted_words_key(uuid: str) -> str:
+    """
+    Storage key for the words marked correct in one job.
+
+    Per job rather than global: a word index only means anything against the
+    transcription it came from.
+    """
+
+    return f"srt_accepted_words_{uuid}"
 
 settings = get_settings()
 
@@ -88,6 +101,11 @@ class SRTEditor:
         self.show_uncertain_words = False
         self.review_sensitivity = DEFAULT_REVIEW_SENSITIVITY
         self.flagged_count_element = None
+
+        # Words the user has confirmed are correct, by word identity. Called
+        # back so the page can persist them.
+        self.accepted_words: set = set()
+        self.on_accepted_change: Optional[Callable] = None
         self.__active_text_area = None
 
         # Initialize undo/redo manager
@@ -333,8 +351,10 @@ class SRTEditor:
     def set_autoscroll(self, autoscroll: bool) -> None:
         """
         Set autoscroll property.
+
+        Coerced, because the value can come straight from stored preferences.
         """
-        self.autoscroll = autoscroll
+        self.autoscroll = bool(autoscroll)
 
     async def handle_key_event(self, event: events.KeyEventArguments) -> None:
         # Only handle keydown events, not keyup to prevent double-firing
@@ -638,6 +658,12 @@ class SRTEditor:
 
         loaded.sort(key=lambda word: word["s"])
 
+        # Stable identity for each word, used to remember which ones have been
+        # marked correct. Position in the caption cannot serve: it shifts the
+        # moment a word is inserted.
+        for position, word in enumerate(loaded):
+            word["i"] = position
+
         self.words = loaded
         self.__word_midpoints = [(word["s"] + word["e"]) / 2 for word in loaded]
 
@@ -685,6 +711,82 @@ class SRTEditor:
 
         return score is not None and score < self.review_threshold()
 
+    def word_needs_review(self, word: Optional[dict]) -> bool:
+        """
+        Whether a word should carry a flag right now.
+
+        A word the user has marked correct never does, however low it scored:
+        they have looked at it, which is more than the model can say.
+        """
+
+        if not word or "c" not in word:
+            return False
+
+        if word.get("i") in self.accepted_words:
+            return False
+
+        return self.is_flagged(word["c"])
+
+    def accept_word(self, identity) -> None:
+        """
+        Mark a word correct, taking its flag away.
+        """
+
+        self.accepted_words.add(identity)
+        self.after_accepted_change()
+
+    def restore_word(self, identity) -> None:
+        """
+        Undo marking a word correct, so it can be flagged again.
+        """
+
+        self.accepted_words.discard(identity)
+        self.after_accepted_change()
+
+    def toggle_word_accepted(self, identity) -> None:
+        """
+        Flip whether a word is marked correct.
+        """
+
+        if identity in self.accepted_words:
+            self.restore_word(identity)
+        else:
+            self.accept_word(identity)
+
+    def restore_accepted_words(self, identities) -> None:
+        """
+        Load previously marked words, before the first render.
+
+        Anything that is not a word index is dropped rather than trusted, so
+        a malformed value cannot silently unflag the wrong word.
+        """
+
+        self.accepted_words = {
+            identity for identity in (identities or []) if isinstance(identity, int)
+        }
+
+    def after_accepted_change(self) -> None:
+        """
+        Re-render and hand the new set to whoever is persisting it.
+        """
+
+        self.refresh_display(force_full_refresh=True)
+        self.update_flagged_count()
+
+        if self.on_accepted_change:
+            self.on_accepted_change(sorted(self.accepted_words))
+
+    def handle_word_click(self, event) -> None:
+        """
+        Toggle the word a click landed on. Only fires for marked words: the
+        browser-side handler emits nothing for anything else.
+        """
+
+        identity = event.args
+
+        if isinstance(identity, (int, float)):
+            self.toggle_word_accepted(int(identity))
+
     def flagged_word_count(self) -> int:
         """
         How many words are flagged across the whole transcription.
@@ -697,8 +799,8 @@ class SRTEditor:
         return sum(
             1
             for caption in self.captions
-            for score in self.aligned_word_scores(caption)
-            if self.is_flagged(score)
+            for word in self.aligned_words(caption)
+            if self.word_needs_review(word)
         )
 
     def restore_review_state(self, show, sensitivity) -> None:
@@ -826,12 +928,14 @@ class SRTEditor:
         """
         Caption text with the words worth reviewing marked up.
 
-        Returns None when nothing in this caption is flagged.
+        Words already marked correct are rendered quietly rather than dropped
+        entirely, so the mark can be taken back. Returns None when the caption
+        has nothing to show either way.
         """
 
-        scores = self.aligned_word_scores(caption)
+        words = self.aligned_words(caption)
 
-        if not scores:
+        if not words:
             return None
 
         # Keep the separators so line breaks and spacing survive the round trip.
@@ -845,24 +949,29 @@ class SRTEditor:
                 parts.append(html_escape(token).replace("\n", "<br>"))
                 continue
 
-            score = scores[index] if index < len(scores) else None
+            word = words[index] if index < len(words) else None
             index += 1
 
-            if not self.is_flagged(score):
+            if self.word_needs_review(word):
+                label, style = REVIEW_TOOLTIP, "review-word"
+            elif word is not None and word.get("i") in self.accepted_words:
+                label, style = ACCEPTED_TOOLTIP, "review-accepted"
+            else:
                 parts.append(html_escape(token))
                 continue
 
             marked = True
 
-            # One marking and one message for every flagged word: the score
-            # behind it is not precise enough to justify grading them against
-            # each other in the margin. The text rides on a data attribute
-            # rather than title= so the tooltip is a CSS box we can style;
-            # aria-label keeps it reachable for screen readers.
+            # data-word carries the word identity for the click handler. One
+            # marking and one message per flagged word: the score behind it is
+            # not precise enough to grade them against each other. The text
+            # rides on a data attribute rather than title= so the tooltip is a
+            # CSS box we can style; aria-label keeps it reachable for screen
+            # readers.
             parts.append(
-                f'<span class="review-word" '
-                f'data-review="{REVIEW_TOOLTIP}" '
-                f'aria-label="{REVIEW_TOOLTIP}">{html_escape(token)}</span>'
+                f'<span class="{style}" data-word="{word.get("i")}" '
+                f'data-review="{label}" '
+                f'aria-label="{label}">{html_escape(token)}</span>'
             )
 
         return "".join(parts) if marked else None
@@ -1916,6 +2025,24 @@ class SRTEditor:
         self.update_words_per_minute()
         self.refresh_display(force_full_refresh=True)
 
+    def attach_word_clicks(self, element) -> None:
+        """
+        Let a click on a marked word toggle whether it is correct.
+
+        The words live inside one block of raw HTML, so the click is handled
+        by delegation. The browser-side handler emits nothing unless the click
+        landed on a marked word, which keeps ordinary clicks off the wire.
+        """
+
+        element.on(
+            "click",
+            self.handle_word_click,
+            js_handler=(
+                "(e) => { const word = e.target.closest('[data-word]');"
+                " if (word) { emit(Number(word.dataset.word)); } }"
+            ),
+        )
+
     def create_caption_card(self, caption: SRTCaption) -> ui.card:
         """
         Create a visual card for a caption.
@@ -2087,8 +2214,10 @@ class SRTEditor:
                             )
 
                             if review_html:
-                                ui.html(review_html, sanitize=False).classes(
-                                    "text-sm leading-relaxed whitespace-pre-wrap"
+                                self.attach_word_clicks(
+                                    ui.html(review_html, sanitize=False).classes(
+                                        "text-sm leading-relaxed whitespace-pre-wrap"
+                                    )
                                 )
                             else:
                                 ui.label(caption.text).classes(
@@ -2347,8 +2476,10 @@ class SRTEditor:
                         )
 
                         if review_html:
-                            ui.html(review_html, sanitize=False).classes(
-                                "text-sm leading-relaxed whitespace-pre-wrap"
+                            self.attach_word_clicks(
+                                ui.html(review_html, sanitize=False).classes(
+                                    "text-sm leading-relaxed whitespace-pre-wrap"
+                                )
                             )
                         else:
                             ui.label(caption.text).classes(

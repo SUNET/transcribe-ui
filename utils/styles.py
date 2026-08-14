@@ -732,9 +732,21 @@ theme_styles = """
        not red and not a wavy underline: red reads as broken and wavy reads as
        a spellchecker, and neither is what this means. It is an invitation to
        look, so it is a calm highlight in a colour used for nothing else. */
+    /* A word the reader has confirmed. The flag is gone -- no highlight, no
+       colour -- but a hairline keeps it findable and clickable, so marking a
+       word correct is not a one-way door. */
+    .review-accepted {
+        position: relative;
+        cursor: pointer;
+        border-bottom: 1px dotted var(--color-border-subtle);
+    }
+    .review-accepted:hover {
+        border-bottom-color: var(--color-review-accent);
+    }
+
     .review-word {
         position: relative;
-        cursor: help;
+        cursor: pointer;
         padding: 1px 3px;
         border-radius: 3px;
         color: var(--color-review-text);
@@ -747,7 +759,8 @@ theme_styles = """
 
     /* Shared hover message. A CSS box rather than title=, which the browser
        draws itself and stylesheets cannot reach. */
-    .review-word::after {
+    .review-word::after,
+    .review-accepted::after {
         content: attr(data-review);
         position: absolute;
         bottom: calc(100% + 6px);
@@ -771,7 +784,9 @@ theme_styles = """
         transition: opacity 0.12s ease-in-out;
     }
     .review-word:hover::after,
-    .review-word:focus-visible::after {
+    .review-word:focus-visible::after,
+    .review-accepted:hover::after,
+    .review-accepted:focus-visible::after {
         opacity: 1;
         visibility: visible;
     }

@@ -507,3 +507,156 @@ class TestMarkingSurvivesEditing:
         scores = editor.aligned_word_scores(caption(text))
 
         assert all(score == 0.10 for score in scores), "alignment dropped words"
+
+
+class TestPersistedAutoscroll:
+    """
+    Autoscroll survives a reload, like the review preferences.
+    """
+
+    @pytest.mark.parametrize("stored", [True, False])
+    def test_restores_the_stored_value(self, editor, stored):
+        editor.set_autoscroll(stored)
+
+        assert editor.autoscroll is stored
+
+    @pytest.mark.parametrize("stored", [None, "", 0, 1, "yes"])
+    def test_coerces_whatever_was_stored(self, editor, stored):
+        """
+        The value arrives straight from storage, so it may be any JSON type.
+        """
+
+        editor.set_autoscroll(stored)
+
+        assert editor.autoscroll is bool(stored)
+
+
+class TestMarkingWordsCorrect:
+    """
+    A flagged word can be confirmed correct, which takes its flag away.
+    """
+
+    def flagged(self, editor, text=TEXT):
+        html = editor.get_review_html(caption(text)) or ""
+
+        return re.findall(r'class="review-word"[^>]*>([^<]*)</span>', html)
+
+    def accepted(self, editor, text=TEXT):
+        html = editor.get_review_html(caption(text)) or ""
+
+        return re.findall(r'class="review-accepted"[^>]*>([^<]*)</span>', html)
+
+    def test_words_carry_a_stable_identity(self, editor):
+        editor.load_words(PAYLOAD)
+
+        assert [word["i"] for word in editor.words] == [0, 1, 2, 3]
+
+    def test_accepting_removes_the_flag(self, editor):
+        editor.load_words(PAYLOAD)
+
+        assert self.flagged(editor) == ["på"]
+
+        editor.accept_word(1)
+
+        assert self.flagged(editor) == []
+
+    def test_accepted_word_stays_clickable(self, editor):
+        """
+        Marking a word correct must not be a one-way door.
+        """
+
+        editor.load_words(PAYLOAD)
+        editor.accept_word(1)
+
+        assert self.accepted(editor) == ["på"]
+        assert 'data-word="1"' in editor.get_review_html(caption())
+
+    def test_restoring_brings_the_flag_back(self, editor):
+        editor.load_words(PAYLOAD)
+        editor.accept_word(1)
+        editor.restore_word(1)
+
+        assert self.flagged(editor) == ["på"]
+
+    def test_toggle_flips_both_ways(self, editor):
+        editor.load_words(PAYLOAD)
+
+        editor.toggle_word_accepted(1)
+        assert self.flagged(editor) == []
+
+        editor.toggle_word_accepted(1)
+        assert self.flagged(editor) == ["på"]
+
+    def test_accepted_word_is_not_counted(self, editor):
+        editor.load_words(PAYLOAD)
+        editor.captions = [caption()]
+
+        assert editor.flagged_word_count() == 1
+
+        editor.accept_word(1)
+
+        assert editor.flagged_word_count() == 0
+
+    def test_acceptance_survives_a_sensitivity_change(self, editor):
+        """
+        Raising sensitivity flags more words, but not one already confirmed.
+        """
+
+        editor.load_words(PAYLOAD)
+        editor.accept_word(1)
+        editor.set_review_sensitivity("high")
+
+        assert "på" not in self.flagged(editor)
+
+    def test_change_is_handed_to_the_persistence_hook(self, editor):
+        editor.load_words(PAYLOAD)
+        saved = []
+        editor.on_accepted_change = saved.append
+
+        editor.accept_word(3)
+        editor.accept_word(1)
+        editor.restore_word(3)
+
+        assert saved == [[3], [1, 3], [1]], "sorted, and after every change"
+
+    @pytest.mark.parametrize(
+        "stored,expected",
+        [
+            ([1, 3], {1, 3}),
+            ([], set()),
+            (None, set()),
+            (["1", None, 2.5, {"i": 1}, 0], {0}),
+        ],
+    )
+    def test_restore_drops_anything_that_is_not_an_index(
+        self, editor, stored, expected
+    ):
+        editor.restore_accepted_words(stored)
+
+        assert editor.accepted_words == expected
+
+    def test_storage_key_is_per_job(self):
+        from utils.srt import accepted_words_key
+
+        assert accepted_words_key("abc") != accepted_words_key("def")
+        assert "abc" in accepted_words_key("abc")
+
+    def test_click_payload_is_validated(self, editor):
+        """
+        The identity arrives from the browser, so it is checked before use.
+        """
+
+        editor.load_words(PAYLOAD)
+
+        class Event:
+            def __init__(self, args):
+                self.args = args
+
+        editor.handle_word_click(Event("nonsense"))
+        assert editor.accepted_words == set()
+
+        editor.handle_word_click(Event(None))
+        assert editor.accepted_words == set()
+
+        editor.handle_word_click(Event(1))
+        assert editor.accepted_words == {1}

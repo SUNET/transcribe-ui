@@ -27,6 +27,8 @@ from utils.common import page_init
 from utils.helpers import storage_decrypt
 from utils.settings import get_settings
 from utils.srt import (
+    AUTOSCROLL_KEY,
+    accepted_words_key,
     DEFAULT_REVIEW_SENSITIVITY,
     REVIEW_SENSITIVITY_KEY,
     REVIEW_SHOW_KEY,
@@ -184,6 +186,13 @@ def create() -> None:
             app.storage.user.get(REVIEW_SHOW_KEY, False),
             app.storage.user.get(REVIEW_SENSITIVITY_KEY, DEFAULT_REVIEW_SENSITIVITY),
         )
+        editor.set_autoscroll(app.storage.user.get(AUTOSCROLL_KEY, False))
+
+        accepted_key = accepted_words_key(uuid)
+        editor.restore_accepted_words(app.storage.user.get(accepted_key, []))
+        editor.on_accepted_change = lambda words: app.storage.user.update(
+            {accepted_key: words}
+        )
 
         with ui.row().classes("justify-between w-full gap-2"):
             with ui.column().classes("flex-row items-center"):
@@ -243,10 +252,15 @@ def create() -> None:
                         uncertain_switch = None
 
                         with ui.row().classes("items-center gap-4"):
-                            autoscroll = ui.switch("Autoscroll")
-                            autoscroll.on(
-                                "click", lambda: editor.set_autoscroll(autoscroll.value)
+                            def save_autoscroll(event) -> None:
+                                value = bool(event.sender.value)
+                                editor.set_autoscroll(value)
+                                app.storage.user[AUTOSCROLL_KEY] = value
+
+                            autoscroll = ui.switch(
+                                "Autoscroll", value=editor.autoscroll
                             )
+                            autoscroll.on("click", save_autoscroll)
 
                             # Only offered when the result carries confidence
                             # scores; older jobs have none to show.
