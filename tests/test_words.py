@@ -16,11 +16,12 @@
 # limitations under the License.
 
 import json
+import re
 
 import pytest
 
 from utils.caption import SRTCaption
-from utils.srt import SRTEditor
+from utils.srt import DEFAULT_REVIEW_SENSITIVITY, SRTEditor
 
 
 PAYLOAD = {
@@ -95,7 +96,7 @@ class TestLoadWords:
 
         assert len(editor.words) == 1
         assert editor.has_confidence is False
-        assert editor.caption_confidence(caption()) is None
+        assert editor.flagged_word_count() == 0
 
     def test_words_are_sorted_by_start_time(self, editor):
         editor.load_words(
@@ -134,12 +135,15 @@ class TestWordLookup:
     def test_range_is_empty_without_word_data(self, editor):
         assert editor.words_in_range(0.0, 10.0) == []
 
-    def test_caption_confidence_is_the_average(self, editor):
+    def test_caption_words_carry_their_scores(self, editor):
         editor.load_words(PAYLOAD)
 
-        expected = (0.99 + 0.15 + 0.95 + 0.70) / 4
-
-        assert editor.caption_confidence(caption()) == pytest.approx(expected)
+        assert [word["c"] for word in editor.caption_words(caption())] == [
+            0.99,
+            0.15,
+            0.95,
+            0.70,
+        ]
 
 
 class TestSplitAtCursor:
@@ -227,63 +231,96 @@ class TestSplitWithoutCursor:
         assert editor.captions[0].get_end_seconds() == pytest.approx(2.0)
 
 
-class TestConfidenceDisplay:
+class TestReviewMarking:
     """
-    Confidence markup shown when the toggle is on.
+    Marking of words worth reviewing, and the flagged counter.
     """
 
-    def test_marks_only_uncertain_words(self, editor):
+    def test_low_sensitivity_flags_only_the_least_confident(self, editor):
+        editor.load_words(PAYLOAD)
+        editor.captions = [caption()]
+
+        assert editor.review_sensitivity == "low"
+        # Only "på" at 0.15 sits below the low threshold of 0.25.
+        assert editor.flagged_word_count() == 1
+
+    def test_raising_sensitivity_flags_strictly_more(self, editor):
+        editor.load_words(PAYLOAD)
+        editor.captions = [caption()]
+
+        counts = []
+
+        for sensitivity in ("low", "medium", "high"):
+            editor.set_review_sensitivity(sensitivity)
+            counts.append(editor.flagged_word_count())
+
+        assert counts == sorted(counts), counts
+        assert counts[0] < counts[-1], "high must flag more than low"
+
+    def test_unknown_sensitivity_is_ignored(self, editor):
         editor.load_words(PAYLOAD)
 
-        html = editor.get_confidence_html(caption())
+        editor.set_review_sensitivity("nonsense")
 
-        assert 'class="confidence-word confidence-low"' in html
-        assert 'class="confidence-word confidence-medium"' in html
-        assert "confidence-high" not in html
+        assert editor.review_sensitivity == "low"
 
-    def test_score_rides_on_a_data_attribute(self, editor):
+    def test_marks_flagged_words_only(self, editor):
+        editor.load_words(PAYLOAD)
+
+        html = editor.get_review_html(caption())
+
+        # "på" (0.15) is flagged at low sensitivity; the rest are not.
+        assert html.count('class="review-word"') == 1
+        assert ">på<" in html
+
+    def test_every_marking_is_identical(self, editor):
         """
-        The score must not go in title=: a native tooltip cannot be coloured.
+        The score is not precise enough to grade flagged words against each
+        other, so they must all look and read the same.
         """
 
         editor.load_words(PAYLOAD)
+        editor.set_review_sensitivity("high")
 
-        html = editor.get_confidence_html(caption())
+        html = editor.get_review_html(caption())
+        markings = re.findall(r'<span class="([^"]*)"', html)
 
-        assert "title=" not in html
-        assert 'data-confidence="Low"' in html
-        assert 'data-confidence="Medium"' in html
-        assert 'aria-label="Confidence: Low"' in html
+        assert len(markings) > 1
+        assert set(markings) == {"review-word"}
+        assert html.count("This word may need review") == 2 * len(markings)
 
-    def test_no_raw_score_is_shown(self, editor):
-        """
-        The score is not a calibrated probability, so it is never surfaced as
-        a number anywhere in the caption markup.
-        """
-
-        editor.load_words(PAYLOAD)
-
-        html = editor.get_confidence_html(caption())
-
-        assert "%" not in html
-        assert "0.15" not in html and "0.7" not in html
-
-    def test_no_markup_when_every_word_is_confident(self, editor):
+    def test_no_marking_when_nothing_is_flagged(self, editor):
         editor.load_words(
             {"version": 1, "words": [{"t": "Hej", "s": 0.0, "e": 0.5, "c": 0.99}]}
         )
 
-        assert editor.get_confidence_html(caption("Hej")) is None
+        assert editor.get_review_html(caption("Hej")) is None
 
-    def test_no_markup_without_confidence_scores(self, editor):
+    def test_no_marking_without_confidence_scores(self, editor):
         editor.load_words({"version": 1, "words": [{"t": "Hej", "s": 0.0, "e": 0.5}]})
 
-        assert editor.get_confidence_html(caption("Hej")) is None
+        assert editor.get_review_html(caption("Hej")) is None
+        assert editor.flagged_word_count() == 0
+
+    def test_shared_tooltip_carries_no_score(self, editor):
+        """
+        One message for every flagged word, and never a raw number.
+        """
+
+        editor.load_words(PAYLOAD)
+
+        html = editor.get_review_html(caption())
+
+        assert "title=" not in html
+        assert 'data-review="This word may need review"' in html
+        assert 'aria-label="This word may need review"' in html
+        assert "%" not in html
+        assert "0.15" not in html
 
     def test_escapes_caption_text(self, editor):
         editor.load_words(PAYLOAD)
 
-        html = editor.get_confidence_html(caption("<b>Hej</b> på dig idag"))
+        html = editor.get_review_html(caption("Hej på <b>dig</b> idag"))
 
         assert "<b>" not in html
         assert "&lt;b&gt;" in html
@@ -291,56 +328,182 @@ class TestConfidenceDisplay:
     def test_keeps_line_breaks(self, editor):
         editor.load_words(PAYLOAD)
 
-        html = editor.get_confidence_html(caption("Hej på\ndig idag"))
+        html = editor.get_review_html(caption("Hej på\ndig idag"))
 
         assert "<br>" in html
 
-    @pytest.mark.parametrize(
-        "score,expected",
-        [
-            (None, ""),
-            (0.10, "confidence-low"),
-            (0.50, "confidence-medium"),
-            (0.90, "confidence-high"),
-        ],
-    )
-    def test_confidence_class(self, score, expected):
-        assert SRTEditor.confidence_class(score) == expected
+    def test_counter_reports_zero_while_switched_off(self, editor):
+        editor.load_words(PAYLOAD)
 
-    @pytest.mark.parametrize(
-        "score,expected",
-        [(None, ""), (0.10, "low"), (0.50, "medium"), (0.90, "high")],
-    )
-    def test_confidence_level(self, score, expected):
-        assert SRTEditor.confidence_level(score) == expected
+        class Label:
+            text = None
 
-    @pytest.mark.parametrize(
-        "score,expected",
-        [(None, ""), (0.10, "Low"), (0.50, "Medium"), (0.90, "High")],
-    )
-    def test_confidence_label(self, score, expected):
-        assert SRTEditor.confidence_label(score) == expected
+            def set_text(self, value):
+                self.text = value
 
-    def test_label_follows_the_configured_thresholds(self, monkeypatch):
+        editor.captions = [caption()]
+        label = Label()
+        editor.set_flagged_count_element(label)
+
+        assert label.text == "0 flagged", "off by default, so nothing is flagged"
+
+        editor.set_show_uncertain_words(True)
+
+        assert label.text == "1 flagged"
+
+        editor.set_show_uncertain_words(False)
+
+        assert label.text == "0 flagged"
+
+    def test_counter_follows_sensitivity(self, editor):
+        editor.load_words(PAYLOAD)
+
+        class Label:
+            text = None
+
+            def set_text(self, value):
+                self.text = value
+
+        editor.captions = [caption()]
+        label = Label()
+        editor.set_flagged_count_element(label)
+        editor.set_show_uncertain_words(True)
+        editor.set_review_sensitivity("high")
+
+        assert label.text == f"{editor.flagged_word_count()} flagged"
+
+
+class TestPersistedReviewState:
+    """
+    Review preferences survive a reload via app.storage.user.
+    """
+
+    def test_restores_both_preferences(self, editor):
+        editor.restore_review_state(True, "high")
+
+        assert editor.show_uncertain_words is True
+        assert editor.review_sensitivity == "high"
+
+    @pytest.mark.parametrize("stored", ["", None, "HIGH", "medium ", 3, "nonsense"])
+    def test_unrecognised_sensitivity_falls_back_to_the_default(self, editor, stored):
         """
-        The bands are settings, so the label must move with them rather than
-        being pinned to the defaults.
+        A value left by an older editor must not silently flag nothing.
         """
 
-        from utils import srt as srt_module
+        editor.restore_review_state(True, stored)
 
-        monkeypatch.setattr(srt_module.settings, "CONFIDENCE_MEDIUM", 0.95)
+        assert editor.review_sensitivity == DEFAULT_REVIEW_SENSITIVITY
 
-        assert SRTEditor.confidence_label(0.90) == "Medium"
+    @pytest.mark.parametrize("stored", [None, "", 0, "no"])
+    def test_show_flag_is_coerced(self, editor, stored):
+        editor.restore_review_state(stored, "low")
 
-    def test_chip_and_word_classes_do_not_collide(self):
+        assert editor.show_uncertain_words is bool(stored)
+
+    def test_restoring_does_not_touch_the_caption_list(self, editor):
         """
-        The chip must not pick up the inline word markup's underline, so the
-        two must never share a class name.
+        Runs before the first render, so it must not refresh anything.
         """
 
-        for score in (0.10, 0.50, 0.90):
-            word_class = SRTEditor.confidence_class(score)
-            chip_class = f"confidence-chip-{SRTEditor.confidence_level(score)}"
+        def explode(*args, **kwargs):
+            raise AssertionError("restore must not refresh the display")
 
-            assert word_class != chip_class
+        editor.refresh_display = explode
+
+        editor.restore_review_state(True, "high")
+
+    def test_restored_state_drives_the_markup(self, editor):
+        editor.load_words(PAYLOAD)
+        editor.captions = [caption()]
+        editor.restore_review_state(True, "high")
+
+        html = editor.get_review_html(caption())
+
+        assert html is not None
+        assert html.count('class="review-word"') == editor.flagged_word_count()
+
+
+class TestMarkingSurvivesEditing:
+    """
+    The marking must describe the text on screen, not the text the model
+    originally produced. Both cases here were reported as bugs.
+    """
+
+    def marked(self, editor, text):
+        """Words actually marked in a caption, in order."""
+        html = editor.get_review_html(caption(text))
+
+        return re.findall(r'aria-label="[^"]*">([^<]*)</span>', html or "")
+
+    def test_editing_a_flagged_word_clears_its_score(self, editor):
+        """
+        "på" is flagged; replacing it must not leave the flag on whatever the
+        user typed instead -- that score described a different word.
+        """
+
+        editor.load_words(PAYLOAD)
+
+        assert self.marked(editor, TEXT) == ["på"]
+        assert self.marked(editor, "Hej två dig idag") == []
+
+    def test_inserting_a_word_does_not_shift_the_marking(self, editor):
+        """
+        Inserting a word must not push the flag onto its neighbour.
+        """
+
+        editor.load_words(PAYLOAD)
+
+        # "på" stays flagged; the inserted word takes no flag of its own.
+        assert self.marked(editor, "Hej på nytt dig idag") == ["på"]
+        assert self.marked(editor, "helt Hej på dig idag") == ["på"]
+
+    def test_deleting_a_word_keeps_the_rest_aligned(self, editor):
+        editor.load_words(PAYLOAD)
+
+        assert self.marked(editor, "Hej på idag") == ["på"]
+
+    def test_recasing_and_punctuation_keep_the_score(self, editor):
+        """
+        Only the word itself decides the match, so tidying punctuation or
+        capitalisation must not silently drop a flag.
+        """
+
+        editor.load_words(PAYLOAD)
+
+        assert self.marked(editor, "Hej På, dig idag") == ["På,"]
+
+    def test_rewriting_the_caption_entirely_flags_nothing(self, editor):
+        editor.load_words(PAYLOAD)
+
+        assert self.marked(editor, "helt annan text här") == []
+
+    def test_count_drops_when_a_flagged_word_is_fixed(self, editor):
+        editor.load_words(PAYLOAD)
+        editor.captions = [caption(TEXT)]
+
+        assert editor.flagged_word_count() == 1
+
+        editor.captions = [caption("Hej två dig idag")]
+
+        assert editor.flagged_word_count() == 0
+
+    def test_repeated_words_stay_aligned(self, editor):
+        """
+        SequenceMatcher's autojunk heuristic drops frequently repeated
+        elements; it must stay off or repeated words lose their scores.
+        """
+
+        editor.load_words(
+            {
+                "version": 1,
+                "words": [
+                    {"t": "ja", "s": i * 0.01, "e": i * 0.01 + 0.005, "c": 0.10}
+                    for i in range(300)
+                ],
+            }
+        )
+
+        text = " ".join(["ja"] * 300)
+        scores = editor.aligned_word_scores(caption(text))
+
+        assert all(score == 0.10 for score in scores), "alignment dropped words"

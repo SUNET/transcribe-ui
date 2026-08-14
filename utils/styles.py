@@ -76,6 +76,13 @@ theme_styles = """
         --color-warning-border: #ffc107;
         --color-warning-icon: #ff9800;
 
+        /* Words flagged for review. A violet used nowhere else in the app, so
+           it cannot be mistaken for a status colour. Not red: the word is not
+           wrong, it is worth a look. */
+        --color-review-bg: #ede9fb;
+        --color-review-accent: #6d51c9;
+        --color-review-text: #2f1c66;
+
         --color-header-bg: #ffffff;
 
         --color-help-bg-start: #ffffff;
@@ -167,6 +174,10 @@ theme_styles = """
         --color-warning-bg: #3a3020;
         --color-warning-border: #ffc107;
         --color-warning-icon: #ffb300;
+
+        --color-review-bg: #2f2748;
+        --color-review-accent: #b3a1f0;
+        --color-review-text: #ece7ff;
 
         --color-header-bg: #1e1e1e;
 
@@ -716,106 +727,58 @@ theme_styles = """
         border-color: var(--color-warning-icon) !important;
     }
 
-    /* ── Word confidence ── */
-    /* Score chip on a caption. Deliberately not a q-badge: that comes with
-       Quasar's primary colour attached. Every colour here is set outright so
-       nothing falls through to a framework default. */
-    .confidence-chip {
-        display: inline-flex;
-        align-items: center;
-        font-size: 12px;
-        font-weight: 700;
-        line-height: 1;
-        padding: 3px 7px;
-        border-radius: 4px;
-        border: 1px solid transparent;
-        cursor: help;
-    }
-    .confidence-chip-high {
-        color: var(--color-text-primary);
-        background-color: var(--color-bg-surface-alt);
-        border-color: var(--color-text-muted);
-    }
-    .confidence-chip-medium {
-        color: var(--color-text-primary);
-        background-color: var(--color-warning-bg);
-        border-color: var(--color-warning-border);
-    }
-    .confidence-chip-low {
-        color: var(--color-text-danger);
-        background-color: var(--color-status-error-bg);
-        border-color: var(--color-status-error-border);
-    }
-    /* Uncertain words, marked inline in the caption text: the word itself is
-       highlighted, so it is visible without hovering. Severity lives on the
-       background rather than the text colour -- amber text on a white card is
-       far too faint to read a word through. Same tints as the chip above.
-       The wavy underline stays as a cue that does not depend on colour.
-       Class names are kept distinct from the chip's so neither inherits the
-       other's styling. */
-    .confidence-word {
+    /* ── Words flagged for review ── */
+    /* One marking for every flagged word, whatever its score. Deliberately
+       not red and not a wavy underline: red reads as broken and wavy reads as
+       a spellchecker, and neither is what this means. It is an invitation to
+       look, so it is a calm highlight in a colour used for nothing else. */
+    .review-word {
         position: relative;
         cursor: help;
         padding: 1px 3px;
         border-radius: 3px;
-        text-underline-offset: 3px;
+        color: var(--color-review-text);
+        background-color: var(--color-review-bg);
+        box-shadow: inset 0 -2px 0 var(--color-review-accent);
         /* Keep the highlight intact if a word wraps across lines. */
         box-decoration-break: clone;
         -webkit-box-decoration-break: clone;
     }
-    .confidence-word.confidence-medium {
-        color: var(--color-text-primary);
-        background-color: var(--color-warning-bg);
-        text-decoration: underline wavy var(--color-warning-icon);
-    }
-    .confidence-word.confidence-low {
-        color: var(--color-text-danger);
-        background-color: var(--color-status-error-bg);
-        text-decoration: underline wavy var(--color-text-danger);
-    }
 
-    /* Per-word score on hover. A CSS box rather than title=, so it can be
-       coloured by severity -- native title tooltips are drawn by the browser
-       and cannot be styled. */
-    .confidence-word::after {
-        content: attr(data-confidence);
+    /* Shared hover message. A CSS box rather than title=, which the browser
+       draws itself and stylesheets cannot reach. */
+    .review-word::after {
+        content: attr(data-review);
         position: absolute;
         bottom: calc(100% + 6px);
         left: 50%;
         transform: translateX(-50%);
         z-index: 9000;
-        padding: 3px 7px;
+        padding: 4px 8px;
         border-radius: 4px;
-        border: 1px solid currentColor;
+        border: 1px solid var(--color-review-accent);
+        color: var(--color-review-text);
+        background-color: var(--color-bg-surface);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
         font-size: 12px;
-        font-weight: 700;
+        font-weight: 600;
         line-height: 1;
         white-space: nowrap;
-        /* The word underneath now carries the same tint, so lift the tooltip
-           off the text instead of letting the two tints run together. */
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-        /* Absolutely positioned, so the wavy underline does not reach it --
-           stated anyway so a change to the parent cannot bleed through. */
         text-decoration: none;
         pointer-events: none;
         opacity: 0;
         visibility: hidden;
         transition: opacity 0.12s ease-in-out;
     }
-    .confidence-word:hover::after,
-    .confidence-word:focus-visible::after {
+    .review-word:hover::after,
+    .review-word:focus-visible::after {
         opacity: 1;
         visibility: visible;
     }
-    .confidence-word.confidence-medium::after {
-        color: var(--color-text-primary);
-        background-color: var(--color-warning-bg);
-        border-color: var(--color-warning-border);
-    }
-    .confidence-word.confidence-low::after {
-        color: var(--color-text-danger);
-        background-color: var(--color-status-error-bg);
-        border-color: var(--color-status-error-border);
+
+    /* Review controls under the video. */
+    .review-count {
+        font-variant-numeric: tabular-nums;
     }
 
     /* ── SRT editor info panel ── */

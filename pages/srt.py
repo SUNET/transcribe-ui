@@ -26,7 +26,12 @@ from utils.styles import default_styles
 from utils.common import page_init
 from utils.helpers import storage_decrypt
 from utils.settings import get_settings
-from utils.srt import SRTEditor
+from utils.srt import (
+    DEFAULT_REVIEW_SENSITIVITY,
+    REVIEW_SENSITIVITY_KEY,
+    REVIEW_SHOW_KEY,
+    SRTEditor,
+)
 from utils.video import create_video_proxy
 
 create_video_proxy()
@@ -165,6 +170,13 @@ def create() -> None:
         except (httpx.HTTPError, ValueError):
             editor.load_words(None)
 
+        # Restore the review preferences before the captions are rendered, so
+        # the first paint already reflects them rather than flashing unmarked.
+        editor.restore_review_state(
+            app.storage.user.get(REVIEW_SHOW_KEY, False),
+            app.storage.user.get(REVIEW_SENSITIVITY_KEY, DEFAULT_REVIEW_SENSITIVITY),
+        )
+
         with ui.row().classes("justify-between w-full gap-2"):
             with ui.column().classes("flex-row items-center"):
                 editor.create_undo_redo_panel()
@@ -218,6 +230,10 @@ def create() -> None:
                             "timeupdate",
                             lambda: editor.select_caption_from_video(),
                         )
+                        # Stays None when the result carries no confidence
+                        # scores, which is what hides the review controls.
+                        uncertain_switch = None
+
                         with ui.row().classes("items-center gap-4"):
                             autoscroll = ui.switch("Autoscroll")
                             autoscroll.on(
@@ -227,17 +243,61 @@ def create() -> None:
                             # Only offered when the result carries confidence
                             # scores; older jobs have none to show.
                             if editor.has_confidence:
-                                confidence_switch = ui.switch("Confidence")
-                                confidence_switch.on(
-                                    "click",
-                                    lambda: editor.set_show_confidence(
-                                        confidence_switch.value
-                                    ),
+
+                                def save_show_uncertain(event) -> None:
+                                    value = bool(event.sender.value)
+                                    editor.set_show_uncertain_words(value)
+                                    app.storage.user[REVIEW_SHOW_KEY] = value
+
+                                uncertain_switch = ui.switch(
+                                    "Uncertain words",
+                                    value=editor.show_uncertain_words,
                                 )
-                                with confidence_switch:
+                                uncertain_switch.on("click", save_show_uncertain)
+                                with uncertain_switch:
                                     ui.tooltip(
-                                        "Mark how sure the model was about each word."
+                                        "Highlight words that may need review"
                                     )
+
+                        if uncertain_switch is not None:
+                            # Sensitivity only means anything while the
+                            # highlighting is on, so it travels with it.
+                            with ui.row().classes(
+                                "items-center gap-2"
+                            ) as sensitivity_row:
+                                ui.label("Sensitivity:").classes("text-sm")
+
+                                def save_sensitivity(event) -> None:
+                                    editor.set_review_sensitivity(event.sender.value)
+                                    # Persist what the editor accepted, so an
+                                    # unrecognised value cannot be stored.
+                                    app.storage.user[REVIEW_SENSITIVITY_KEY] = (
+                                        editor.review_sensitivity
+                                    )
+
+                                sensitivity = ui.toggle(
+                                    {
+                                        "low": "Low",
+                                        "medium": "Medium",
+                                        "high": "High",
+                                    },
+                                    value=editor.review_sensitivity,
+                                ).props("dense unelevated no-caps")
+                                sensitivity.on("update:model-value", save_sensitivity)
+                                with sensitivity:
+                                    ui.tooltip(
+                                        "How much of the transcription to flag "
+                                        "for review"
+                                    )
+
+                                flagged = ui.label().classes(
+                                    "text-sm text-theme-muted review-count"
+                                )
+                                editor.set_flagged_count_element(flagged)
+
+                            sensitivity_row.bind_visibility_from(
+                                uncertain_switch, "value"
+                            )
                         with ui.column().classes("srt-info-panel p-4 w-full"):
                             ui.label(filename).classes("text-h6").style(
                                 "align-self: center;"

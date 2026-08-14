@@ -20,6 +20,7 @@ import httpx
 import json
 import re
 
+from difflib import SequenceMatcher
 from html import escape as html_escape
 from nicegui import events, ui
 from typing import Callable, List, Optional
@@ -36,11 +37,21 @@ from utils.undo_redo import UndoRedoManager
 # speak a version the code does not implement would only mis-parse silently.
 WORDS_FORMAT_VERSION = 1
 
-# What each severity band is called in the editor. The band is shown instead
-# of the raw score: the model's confidence is not a calibrated probability, so
-# a percentage reads as odds it cannot back up, and its absolute value shifts
-# between models and languages.
-CONFIDENCE_LABELS = {"low": "Low", "medium": "Medium", "high": "High"}
+# How far up the confidence range each sensitivity flags. Words are marked
+# identically whichever setting is in force -- the setting decides how many
+# are marked, not how alarming any one of them looks. The raw score is never
+# surfaced: it is not a calibrated probability, so a number would read as odds
+# it cannot back up, and its absolute value shifts between models.
+REVIEW_SENSITIVITIES = ("low", "medium", "high")
+DEFAULT_REVIEW_SENSITIVITY = "low"
+
+REVIEW_TOOLTIP = "This word may need review"
+
+# Where the review preferences live in app.storage.user, so a reload does not
+# reset them. Plain values: they are display preferences, not secrets, so they
+# do not go through storage_encrypt the way tokens and passwords do.
+REVIEW_SHOW_KEY = "srt_show_uncertain_words"
+REVIEW_SENSITIVITY_KEY = "srt_review_sensitivity"
 
 settings = get_settings()
 
@@ -74,7 +85,9 @@ class SRTEditor:
         self.words: List[dict] = []
         self.__word_midpoints: List[float] = []
         self.has_confidence = False
-        self.show_confidence = False
+        self.show_uncertain_words = False
+        self.review_sensitivity = DEFAULT_REVIEW_SENSITIVITY
+        self.flagged_count_element = None
         self.__active_text_area = None
 
         # Initialize undo/redo manager
@@ -646,73 +659,159 @@ class SRTEditor:
             caption.get_start_seconds(), caption.get_end_seconds()
         )
 
-    def caption_confidence(self, caption: SRTCaption) -> Optional[float]:
+    def review_threshold(self) -> float:
         """
-        Average confidence across a caption's words, or None when the result
-        carries no confidence data.
-        """
-
-        scores = [word["c"] for word in self.caption_words(caption) if "c" in word]
-
-        if not scores:
-            return None
-
-        return sum(scores) / len(scores)
-
-    def set_show_confidence(self, show: bool) -> None:
-        """
-        Toggle the confidence display on the caption list.
+        Confidence below which a word is flagged, for the current sensitivity.
         """
 
-        self.show_confidence = bool(show)
+        return {
+            "low": settings.REVIEW_SENSITIVITY_LOW,
+            "medium": settings.REVIEW_SENSITIVITY_MEDIUM,
+            "high": settings.REVIEW_SENSITIVITY_HIGH,
+        }.get(self.review_sensitivity, settings.REVIEW_SENSITIVITY_LOW)
+
+    def is_flagged(self, score: Optional[float]) -> bool:
+        """
+        Whether a word scoring this low is worth a second look.
+        """
+
+        return score is not None and score < self.review_threshold()
+
+    def flagged_word_count(self) -> int:
+        """
+        How many words are flagged across the whole transcription.
+
+        Counts what is actually marked in the captions rather than scanning
+        the raw word list, so the number tracks edits: fixing a flagged word
+        takes it off the count.
+        """
+
+        return sum(
+            1
+            for caption in self.captions
+            for score in self.aligned_word_scores(caption)
+            if self.is_flagged(score)
+        )
+
+    def restore_review_state(self, show, sensitivity) -> None:
+        """
+        Apply persisted review preferences before the first render.
+
+        Assigns rather than going through the setters, which refresh a caption
+        list that does not exist yet. A sensitivity that is not recognised is
+        ignored, so a value left behind by an older version of the editor
+        falls back to the default instead of flagging nothing.
+        """
+
+        self.show_uncertain_words = bool(show)
+
+        if sensitivity in REVIEW_SENSITIVITIES:
+            self.review_sensitivity = sensitivity
+
+    def set_show_uncertain_words(self, show: bool) -> None:
+        """
+        Toggle the review marking on the caption list.
+        """
+
+        self.show_uncertain_words = bool(show)
         self.refresh_display(force_full_refresh=True)
+        self.update_flagged_count()
+
+    def set_review_sensitivity(self, sensitivity: str) -> None:
+        """
+        Choose how far up the confidence range to flag words.
+        """
+
+        if sensitivity not in REVIEW_SENSITIVITIES:
+            return
+
+        self.review_sensitivity = sensitivity
+
+        if self.show_uncertain_words:
+            self.refresh_display(force_full_refresh=True)
+
+        self.update_flagged_count()
+
+    def set_flagged_count_element(self, element) -> None:
+        """
+        Register the label that reports how many words are flagged.
+        """
+
+        self.flagged_count_element = element
+        self.update_flagged_count()
+
+    def update_flagged_count(self) -> None:
+        """
+        Refresh the flagged-word counter.
+        """
+
+        if self.flagged_count_element is None:
+            return
+
+        count = self.flagged_word_count() if self.show_uncertain_words else 0
+
+        self.flagged_count_element.set_text(f"{count} flagged")
 
     @staticmethod
-    def confidence_level(score: Optional[float]) -> str:
+    def match_key(text: str) -> str:
         """
-        Severity band for a confidence score: "low", "medium", "high", or ""
-        when there is no score.
-        """
-
-        if score is None:
-            return ""
-        if score < settings.CONFIDENCE_LOW:
-            return "low"
-        if score < settings.CONFIDENCE_MEDIUM:
-            return "medium"
-
-        return "high"
-
-    @classmethod
-    def confidence_label(cls, score: Optional[float]) -> str:
-        """
-        What to show the user for a confidence score, or "" when unscored.
+        Normalised form used to decide whether a token is still the word the
+        model transcribed. Case and surrounding punctuation are ignored, so
+        recasing a word or adding a comma does not discard its score.
         """
 
-        return CONFIDENCE_LABELS.get(cls.confidence_level(score), "")
+        return re.sub(r"^\W+|\W+$", "", text).casefold()
 
-    @classmethod
-    def confidence_class(cls, score: Optional[float]) -> str:
+    def aligned_word_scores(self, caption: SRTCaption) -> List[Optional[float]]:
         """
-        CSS class for an uncertain word marked inline in the caption text.
-        """
+        Confidence for each word of a caption, in order.
 
-        level = cls.confidence_level(score)
+        The caption text is aligned against the words the model actually
+        transcribed, rather than paired off by position. Position alone breaks
+        as soon as the text is edited: replacing a word would keep the score
+        that belonged to the old one, and inserting a word would shift every
+        score after it onto the wrong word.
 
-        return f"confidence-{level}" if level else ""
-
-    def get_confidence_html(self, caption: SRTCaption) -> Optional[str]:
-        """
-        Caption text with the words the model was unsure about marked up.
-
-        Words are matched to the caption positionally within the caption's own
-        time range, so an edit only ever throws off the caption it was made in.
-        Returns None when there is nothing worth marking up.
+        A token that no longer matches the word it came from returns None. Its
+        confidence described text the model never saw, so the honest answer is
+        that we do not know -- and an unknown word is not flagged.
         """
 
+        tokens = [token for token in re.split(r"\s+", caption.text) if token]
+        scores: List[Optional[float]] = [None] * len(tokens)
         words = [word for word in self.caption_words(caption) if "c" in word]
 
-        if not words:
+        if not words or not tokens:
+            return scores
+
+        # autojunk would treat repeated words as noise in long captions and
+        # silently drop them from the alignment.
+        matcher = SequenceMatcher(
+            None,
+            [self.match_key(token) for token in tokens],
+            [self.match_key(word["t"]) for word in words],
+            autojunk=False,
+        )
+
+        for tag, token_start, token_end, word_start, _ in matcher.get_opcodes():
+            if tag != "equal":
+                continue
+
+            for offset in range(token_end - token_start):
+                scores[token_start + offset] = words[word_start + offset].get("c")
+
+        return scores
+
+    def get_review_html(self, caption: SRTCaption) -> Optional[str]:
+        """
+        Caption text with the words worth reviewing marked up.
+
+        Returns None when nothing in this caption is flagged.
+        """
+
+        scores = self.aligned_word_scores(caption)
+
+        if not scores:
             return None
 
         # Keep the separators so line breaks and spacing survive the round trip.
@@ -726,50 +825,27 @@ class SRTEditor:
                 parts.append(html_escape(token).replace("\n", "<br>"))
                 continue
 
-            score = words[index]["c"] if index < len(words) else None
+            score = scores[index] if index < len(scores) else None
             index += 1
 
-            if score is None or score >= settings.CONFIDENCE_MEDIUM:
+            if not self.is_flagged(score):
                 parts.append(html_escape(token))
                 continue
 
             marked = True
-            label = self.confidence_label(score)
 
-            # The band rides on a data attribute rather than title=, so the
-            # tooltip is a CSS box we can colour by severity. aria-label keeps
-            # it reachable for screen readers, which title= provided.
+            # One marking and one message for every flagged word: the score
+            # behind it is not precise enough to justify grading them against
+            # each other in the margin. The text rides on a data attribute
+            # rather than title= so the tooltip is a CSS box we can style;
+            # aria-label keeps it reachable for screen readers.
             parts.append(
-                f'<span class="confidence-word {self.confidence_class(score)}" '
-                f'data-confidence="{label}" '
-                f'aria-label="Confidence: {label}">{html_escape(token)}</span>'
+                f'<span class="review-word" '
+                f'data-review="{REVIEW_TOOLTIP}" '
+                f'aria-label="{REVIEW_TOOLTIP}">{html_escape(token)}</span>'
             )
 
         return "".join(parts) if marked else None
-
-    def create_confidence_badge(self, caption: SRTCaption) -> None:
-        """
-        Render the caption's average confidence, when the toggle is on and the
-        caption has scored words.
-        """
-
-        if not self.show_confidence:
-            return
-
-        score = self.caption_confidence(caption)
-
-        if score is None:
-            return
-
-        # A plain label rather than ui.badge(): the badge carries Quasar's
-        # color="primary" prop, which paints it in the theme's blue and has to
-        # be fought off with !important overrides on every property.
-        chip = ui.label(self.confidence_label(score)).classes(
-            f"confidence-chip confidence-chip-{self.confidence_level(score)}"
-        )
-
-        with chip:
-            ui.tooltip("Average word confidence for this block.")
 
     def parse_srt(self, srt_content: str) -> None:
         """
@@ -1466,6 +1542,8 @@ class SRTEditor:
         if caption.text != new_text or force:
             self.save_state_for_undo()
             caption.text = new_text
+            # Editing a word can take it off the count, or put one on it.
+            self.update_flagged_count()
 
     def update_caption_timing(
         self, caption: SRTCaption, start_time: str, end_time: str
@@ -1705,11 +1783,9 @@ class SRTEditor:
                 if caption.is_selected:
                     with ui.row().classes("w-full justify-between") as action_row:
                         action_row.props("id=action_row")
-                        with ui.row().classes("items-center gap-2"):
-                            ui.label(f"#{caption.index}").classes(
-                                "font-bold text-sm text-theme-muted"
-                            )
-                            self.create_confidence_badge(caption)
+                        ui.label(f"#{caption.index}").classes(
+                            "font-bold text-sm text-theme-muted"
+                        )
 
                         if self.data_format == "txt":
                             self.speakers.add(caption.speaker)
@@ -1821,7 +1897,6 @@ class SRTEditor:
                                 ui.label(f"{caption.speaker}:").classes(
                                     "font-bold text-sm"
                                 )
-                            self.create_confidence_badge(caption)
                         ui.label(f"{caption.start_time} - {caption.end_time}").classes(
                             "text-sm text-theme-muted"
                         )
@@ -1840,20 +1915,18 @@ class SRTEditor:
                                     ui.label(f"{caption. speaker}:").classes(
                                         "font-bold text-sm"
                                     )
-                            with ui.row().classes("items-center gap-2"):
-                                self.create_confidence_badge(caption)
-                                ui.label(
-                                    f"{caption.start_time} - {caption.end_time}"
-                                ).classes("text-sm text-theme-muted")
+                            ui.label(
+                                f"{caption.start_time} - {caption.end_time}"
+                            ).classes("text-sm text-theme-muted")
                         with ui.row().classes("w-full justify-between items-end"):
-                            confidence_html = (
-                                self.get_confidence_html(caption)
-                                if self.show_confidence
+                            review_html = (
+                                self.get_review_html(caption)
+                                if self.show_uncertain_words
                                 else None
                             )
 
-                            if confidence_html:
-                                ui.html(confidence_html, sanitize=False).classes(
+                            if review_html:
+                                ui.html(review_html, sanitize=False).classes(
                                     "text-sm leading-relaxed whitespace-pre-wrap"
                                 )
                             else:
@@ -1958,6 +2031,10 @@ class SRTEditor:
                             with container:
                                 self.update_caption_card_content(caption)
 
+        # Splits, merges and deletions all land here, and each of them can
+        # change how many words are flagged.
+        self.update_flagged_count()
+
     def update_caption_card_content(self, caption: SRTCaption) -> None:
         """
         Update the content of an existing caption card
@@ -1979,11 +2056,9 @@ class SRTEditor:
             if caption.is_selected:
                 with ui.row().classes("w-full justify-between") as action_row:
                     action_row.props("id=action_row")
-                    with ui.row().classes("items-center gap-2"):
-                        ui.label(f"#{caption.index}").classes(
-                            "font-bold text-sm text-theme-muted"
-                        )
-                        self.create_confidence_badge(caption)
+                    ui.label(f"#{caption.index}").classes(
+                        "font-bold text-sm text-theme-muted"
+                    )
 
                     if self.data_format == "txt":
                         speaker_select = ui.select(
@@ -2084,7 +2159,6 @@ class SRTEditor:
 
                         if self.data_format == "txt":
                             ui.label(f"{caption.speaker}:").classes("font-bold text-sm")
-                        self.create_confidence_badge(caption)
                     ui.label(f"{caption.start_time} - {caption.end_time}").classes(
                         "text-sm text-theme-muted"
                     )
@@ -2101,20 +2175,18 @@ class SRTEditor:
                                 ui.label(f"{caption. speaker}:").classes(
                                     "font-bold text-sm"
                                 )
-                        with ui.row().classes("items-center gap-2"):
-                            self.create_confidence_badge(caption)
-                            ui.label(
-                                f"{caption.start_time} - {caption.end_time}"
-                            ).classes("text-sm text-theme-muted")
+                        ui.label(f"{caption.start_time} - {caption.end_time}").classes(
+                            "text-sm text-theme-muted"
+                        )
                     with ui.row().classes("w-full justify-between items-end"):
-                        confidence_html = (
-                            self.get_confidence_html(caption)
-                            if self.show_confidence
+                        review_html = (
+                            self.get_review_html(caption)
+                            if self.show_uncertain_words
                             else None
                         )
 
-                        if confidence_html:
-                            ui.html(confidence_html, sanitize=False).classes(
+                        if review_html:
+                            ui.html(review_html, sanitize=False).classes(
                                 "text-sm leading-relaxed whitespace-pre-wrap"
                             )
                         else:

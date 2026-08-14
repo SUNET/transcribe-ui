@@ -85,8 +85,16 @@ This app holds session tokens, user PII, and an encryption password that gates b
 - Anything with a different `version`, or an unparseable payload, is discarded — the editor must open normally without word data. Jobs transcribed before word timings existed have none.
 - Words are flat and time-ordered, not tied to segments. `caption_words()` maps them onto a caption by time range (bisect on precomputed midpoints), so they survive splits, merges and renumbering. Never key word data by caption index.
 - `split_caption(caption, cursor_position=..., text=...)` cuts at the caret and picks the timestamp from the silence between the two adjacent words. Without word data a caret split falls back to proportional; **a split with no caret must keep halving the caption**, which is what results predating this feature rely on.
-- `c` is absent when the worker ran with `WORD_CONFIDENCE=false`. Gate any confidence UI on `editor.has_confidence`, not on the presence of `words`.
-- Confidence markup goes through `get_confidence_html()`, which HTML-escapes every token. Do not build caption markup inline.
+- `c` is absent when the worker ran with `WORD_CONFIDENCE=false`. Gate the review controls on `editor.has_confidence`, not on the presence of `words`.
+- Review markup goes through `get_review_html()`, which HTML-escapes every token. Do not build caption markup inline.
+
+### Words flagged for review
+
+The "Uncertain words" switch highlights words the model was least sure of; "Review sensitivity" (low/medium/high, default low) picks how far up the confidence range to flag, via `REVIEW_SENSITIVITY_*` in settings. Raising sensitivity must only ever flag more.
+
+- **Every flagged word is marked identically** — one class, one shared tooltip. The score is not a calibrated probability, so it cannot support grading flagged words against each other, and the raw number is never shown anywhere.
+- **The marking must not read as an error.** No red, and no wavy underline (that means spellcheck). It uses `--color-review-*`, a violet reserved for this and used nowhere else.
+- The flagged counter comes from `flagged_word_count()` over the whole word list, and reports 0 while the switch is off. Anything that changes the switch or the sensitivity must call `update_flagged_count()`.
 
 ## Settings
 

@@ -53,18 +53,19 @@ class Settings(BaseSettings):
     CHARACTER_LIMIT: int = 42
     CHARACTER_LIMIT_EXCEEDED_COLOR: str = "text-red"
 
-    # Word confidence bands, as fractions. The two thresholds cut the range
-    # into three contiguous bands:
+    # Review sensitivity: how far up the confidence range to flag words for
+    # review. A word is flagged when its score falls below the threshold for
+    # the selected sensitivity, so raising sensitivity flags strictly more.
     #
-    #   below 25%   Low     flagged as likely wrong
-    #   25% - 75%   Medium  flagged as uncertain
-    #   75% and up  High    left unmarked; the model is reliable enough that
-    #                       marking it would only be noise
+    #   Low     only the words the model was least sure of
+    #   Medium  adds the middle of the range
+    #   High    everything the model was not clearly confident about
     #
     # Worth retuning if you change transcription models -- what counts as a
     # low score differs between them.
-    CONFIDENCE_LOW: float = 0.25
-    CONFIDENCE_MEDIUM: float = 0.75
+    REVIEW_SENSITIVITY_LOW: float = 0.25
+    REVIEW_SENSITIVITY_MEDIUM: float = 0.50
+    REVIEW_SENSITIVITY_HIGH: float = 0.75
 
     WHISPER_MODELS: list[str] = [
         "Fast transcription (normal accuracy)",
