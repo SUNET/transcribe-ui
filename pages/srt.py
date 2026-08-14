@@ -105,6 +105,14 @@ def create() -> None:
                 e.preventDefault();
             }
 
+            // Block Ctrl/Cmd + Up/Down, which scroll the page (and jump to
+            // the top or bottom of the document on macOS). Those move a word
+            // between blocks instead.
+            if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey &&
+                (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                e.preventDefault();
+            }
+
             // Handle Escape key globally (even when video player has focus)
             if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
                 // Blur active element

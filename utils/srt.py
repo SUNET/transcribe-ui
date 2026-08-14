@@ -350,6 +350,14 @@ class SRTEditor:
             case "ArrowUp" if event.modifiers.alt and not event.modifiers.shift and not event.modifiers.ctrl and not event.modifiers.meta:
                 self.select_prev_caption()
 
+            # Move the first word to the previous block, Ctrl/⌘+Up
+            case "ArrowUp" if (event.modifiers.ctrl or event.modifiers.meta) and not event.modifiers.shift and not event.modifiers.alt:
+                self.move_first_word_to_previous(self.selected_caption)
+
+            # Move the last word to the next block, Ctrl/⌘+Down
+            case "ArrowDown" if (event.modifiers.ctrl or event.modifiers.meta) and not event.modifiers.shift and not event.modifiers.alt:
+                self.move_last_word_to_next(self.selected_caption)
+
             # Split block at the cursor, Ctrl/⌘+Enter
             case "Enter" if event.modifiers.ctrl and not event.modifiers.shift and not event.modifiers.alt and not event.modifiers.meta:
                 await self.split_caption_at_cursor(self.selected_caption)
@@ -762,27 +770,26 @@ class SRTEditor:
 
         return re.sub(r"^\W+|\W+$", "", text).casefold()
 
-    def aligned_word_scores(self, caption: SRTCaption) -> List[Optional[float]]:
+    def aligned_words(self, caption: SRTCaption) -> List[Optional[dict]]:
         """
-        Confidence for each word of a caption, in order.
+        The transcribed word behind each word of a caption, in order.
 
         The caption text is aligned against the words the model actually
         transcribed, rather than paired off by position. Position alone breaks
-        as soon as the text is edited: replacing a word would keep the score
+        as soon as the text is edited: replacing a word would keep the entry
         that belonged to the old one, and inserting a word would shift every
-        score after it onto the wrong word.
+        entry after it onto the wrong word.
 
-        A token that no longer matches the word it came from returns None. Its
-        confidence described text the model never saw, so the honest answer is
-        that we do not know -- and an unknown word is not flagged.
+        A token that no longer matches the word it came from returns None --
+        it has no timing or confidence we can honestly attribute to it.
         """
 
         tokens = [token for token in re.split(r"\s+", caption.text) if token]
-        scores: List[Optional[float]] = [None] * len(tokens)
-        words = [word for word in self.caption_words(caption) if "c" in word]
+        aligned: List[Optional[dict]] = [None] * len(tokens)
+        words = self.caption_words(caption)
 
         if not words or not tokens:
-            return scores
+            return aligned
 
         # autojunk would treat repeated words as noise in long captions and
         # silently drop them from the alignment.
@@ -798,9 +805,22 @@ class SRTEditor:
                 continue
 
             for offset in range(token_end - token_start):
-                scores[token_start + offset] = words[word_start + offset].get("c")
+                aligned[token_start + offset] = words[word_start + offset]
 
-        return scores
+        return aligned
+
+    def aligned_word_scores(self, caption: SRTCaption) -> List[Optional[float]]:
+        """
+        Confidence for each word of a caption, in order.
+
+        None where the word no longer matches what the model transcribed: its
+        confidence described text the model never saw, so the honest answer is
+        that we do not know -- and an unknown word is not flagged.
+        """
+
+        return [
+            word.get("c") if word else None for word in self.aligned_words(caption)
+        ]
 
     def get_review_html(self, caption: SRTCaption) -> Optional[str]:
         """
@@ -1057,11 +1077,16 @@ class SRTEditor:
         Convert seconds back to SRT timestamp format.
         """
 
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = seconds % 60
-        milliseconds = int((secs % 1) * 1000)
-        secs = int(secs)
+        # Round to whole milliseconds first, then split. Rounding each field
+        # on its own lets a carry strand a timestamp on 59 seconds or 60
+        # minutes. Rounding rather than truncating matters because 2.4 is
+        # held as 2.39999..., which would otherwise lose a millisecond off
+        # most timestamps; the worker writes them the same way.
+        total_milliseconds = max(0, int(round(seconds * 1000)))
+
+        hours, remainder = divmod(total_milliseconds, 3_600_000)
+        minutes, remainder = divmod(remainder, 60_000)
+        secs, milliseconds = divmod(remainder, 1000)
 
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"
 
@@ -1415,6 +1440,142 @@ class SRTEditor:
         self.captions.insert(caption_index + 1, new_caption)
 
         self.renumber_captions()
+        self.update_words_per_minute()
+        self.refresh_display(force_full_refresh=True)
+
+    @staticmethod
+    def split_off_first_word(text: str) -> tuple:
+        """
+        Split text into its first word and the remainder.
+
+        Separators are preserved in the remainder, so a two-line subtitle
+        keeps its line break instead of collapsing to one line.
+        """
+
+        parts = re.split(r"(\s+)", text.strip())
+
+        if len(parts) < 3:
+            return text.strip(), ""
+
+        return parts[0], "".join(parts[2:]).strip()
+
+    @staticmethod
+    def split_off_last_word(text: str) -> tuple:
+        """
+        Split text into everything up to the last word, and the last word.
+        """
+
+        parts = re.split(r"(\s+)", text.strip())
+
+        if len(parts) < 3:
+            return "", text.strip()
+
+        return "".join(parts[:-2]).strip(), parts[-1]
+
+    def move_first_word_to_previous(self, caption: SRTCaption) -> None:
+        """
+        Move the first word of a block to the end of the previous one.
+
+        Both blocks are re-timed from the word data: the previous block now
+        ends where the moved word ends, and this one starts where its new
+        first word starts.
+        """
+
+        if not caption:
+            return
+
+        position = self.captions.index(caption)
+
+        if position == 0:
+            ui.notify("No previous block to move the word to", type="warning")
+            return
+
+        moved_word, remaining = self.split_off_first_word(caption.text)
+
+        if not remaining:
+            ui.notify(
+                "That is the only word in the block -- merge instead",
+                type="warning",
+            )
+            return
+
+        # Resolve the timings before the text changes, since words are matched
+        # to a block by its time range.
+        aligned = self.aligned_words(caption)
+        moved_timing = aligned[0] if aligned else None
+        next_timing = aligned[1] if len(aligned) > 1 else None
+
+        self.save_state_for_undo()
+
+        previous = self.captions[position - 1]
+        previous.text = f"{previous.text.rstrip()} {moved_word}"
+        caption.text = remaining
+
+        if moved_timing and next_timing:
+            previous.end_time = self.seconds_to_timestamp(moved_timing["e"])
+            caption.start_time = self.seconds_to_timestamp(next_timing["s"])
+        else:
+            ui.notify(
+                "Word moved, but the timings could not be updated",
+                type="warning",
+            )
+
+        self.finish_word_move()
+
+    def move_last_word_to_next(self, caption: SRTCaption) -> None:
+        """
+        Move the last word of a block to the start of the next one.
+
+        Both blocks are re-timed from the word data: the next block now starts
+        where the moved word starts, and this one ends where its new last word
+        ends.
+        """
+
+        if not caption:
+            return
+
+        position = self.captions.index(caption)
+
+        if position == len(self.captions) - 1:
+            ui.notify("No next block to move the word to", type="warning")
+            return
+
+        remaining, moved_word = self.split_off_last_word(caption.text)
+
+        if not remaining:
+            ui.notify(
+                "That is the only word in the block -- merge instead",
+                type="warning",
+            )
+            return
+
+        aligned = self.aligned_words(caption)
+        moved_timing = aligned[-1] if aligned else None
+        previous_timing = aligned[-2] if len(aligned) > 1 else None
+
+        self.save_state_for_undo()
+
+        following = self.captions[position + 1]
+        following.text = f"{moved_word} {following.text.lstrip()}"
+        caption.text = remaining
+
+        if moved_timing and previous_timing:
+            following.start_time = self.seconds_to_timestamp(moved_timing["s"])
+            caption.end_time = self.seconds_to_timestamp(previous_timing["e"])
+        else:
+            ui.notify(
+                "Word moved, but the timings could not be updated",
+                type="warning",
+            )
+
+        self.finish_word_move()
+
+    def finish_word_move(self) -> None:
+        """
+        Shared bookkeeping after a word has moved between blocks.
+        """
+
+        self.mark_as_changed()
         self.update_words_per_minute()
         self.refresh_display(force_full_refresh=True)
 
@@ -2419,6 +2580,8 @@ class SRTEditor:
                 "Editing",
                 [
                     ("Split caption at cursor", "Ctrl/⌘ + Enter"),
+                    ("Move first word to previous block", "Ctrl/⌘ + ↑"),
+                    ("Move last word to next block", "Ctrl/⌘ + ↓"),
                     ("Merge with next", "Ctrl + M"),
                     ("Merge with previous", "Ctrl + Shift + M"),
                     ("Add caption after", "Ctrl/⌘ + Shift + Enter"),
