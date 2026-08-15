@@ -27,7 +27,6 @@ from utils.settings import get_settings
 from utils.srt_export import ExportMixin
 from utils.srt_render import RenderMixin, CHARACTER_LIMIT_EXCEEDED_COLOR
 from utils.srt_review import (
-    ACCEPTED_TOOLTIP,
     AUTOSCROLL_KEY,
     DEFAULT_REVIEW_SENSITIVITY,
     REVIEW_SENSITIVITIES,
@@ -36,7 +35,6 @@ from utils.srt_review import (
     REVIEW_TOOLTIP,
     WORDS_FORMAT_VERSION,
     ReviewMixin,
-    accepted_words_key,
 )
 from utils.srt_search import SearchMixin
 from utils.undo_redo import UndoRedoManager
@@ -44,7 +42,6 @@ from utils.undo_redo import UndoRedoManager
 # Re-exported so that `from utils.srt import ...` keeps working for everything
 # that was here before the module was split up.
 __all__ = [
-    "ACCEPTED_TOOLTIP",
     "AUTOSCROLL_KEY",
     "CHARACTER_LIMIT_EXCEEDED_COLOR",
     "DEFAULT_REVIEW_SENSITIVITY",
@@ -54,7 +51,6 @@ __all__ = [
     "REVIEW_TOOLTIP",
     "WORDS_FORMAT_VERSION",
     "SRTEditor",
-    "accepted_words_key",
 ]
 
 settings = get_settings()
@@ -92,11 +88,6 @@ class SRTEditor(ReviewMixin, SearchMixin, ExportMixin, RenderMixin):
         self.show_uncertain_words = False
         self.review_sensitivity = DEFAULT_REVIEW_SENSITIVITY
         self.flagged_count_element = None
-
-        # Words the user has confirmed are correct, by word identity. Called
-        # back so the page can persist them.
-        self.accepted_words: set = set()
-        self.on_accepted_change: Optional[Callable] = None
         self._active_text_area = None
 
         # Initialize undo/redo manager

@@ -732,25 +732,10 @@ theme_styles = """
        not red and not a wavy underline: red reads as broken and wavy reads as
        a spellchecker, and neither is what this means. It is an invitation to
        look, so it is a calm highlight in a colour used for nothing else. */
-    /* A word the reader has confirmed. The flag is gone -- no highlight, no
-       colour -- but a hairline keeps it findable and clickable, so marking a
-       word correct is not a one-way door. */
-    .review-accepted {
-        position: relative;
-        cursor: pointer;
-        /* The review colour rather than a grey hairline, so a confirmed word
-           stays easy to pick out and take back. Dotted and unfilled keeps it
-           clearly below an active flag in the hierarchy. */
-        border-bottom: 2px dotted var(--color-review-accent);
-        padding-bottom: 1px;
-    }
-    .review-accepted:hover {
-        border-bottom-style: solid;
-    }
 
     .review-word {
         position: relative;
-        cursor: pointer;
+        cursor: help;
         padding: 1px 3px;
         border-radius: 3px;
         color: var(--color-review-text);
@@ -763,8 +748,7 @@ theme_styles = """
 
     /* Shared hover message. A CSS box rather than title=, which the browser
        draws itself and stylesheets cannot reach. */
-    .review-word::after,
-    .review-accepted::after {
+    .review-word::after {
         content: attr(data-review);
         position: absolute;
         bottom: calc(100% + 6px);
@@ -788,9 +772,7 @@ theme_styles = """
         transition: opacity 0.12s ease-in-out;
     }
     .review-word:hover::after,
-    .review-word:focus-visible::after,
-    .review-accepted:hover::after,
-    .review-accepted:focus-visible::after {
+    .review-word:focus-visible::after {
         opacity: 1;
         visibility: visible;
     }
@@ -844,11 +826,8 @@ theme_styles = """
        to go here: the colour would draw the word a second time underneath the
        one already in the text area, and the padding would widen it, pushing
        every character after it out of step. Only background and inset shadow
-       are safe -- neither takes up space. The words stay clickable even
-       though the layer itself is not. */
-    .caption-highlights .review-word,
-    .caption-highlights .review-accepted {
-        pointer-events: auto;
+       are safe -- neither takes up space. */
+    .caption-highlights .review-word {
         color: transparent;
         padding: 0;
         border: 0;
@@ -859,13 +838,9 @@ theme_styles = """
         background-color: var(--color-review-bg);
         box-shadow: inset 0 -2px 0 var(--color-review-accent);
     }
-    .caption-highlights .review-accepted {
-        box-shadow: inset 0 -1px 0 var(--color-border-subtle);
-    }
     /* No hover tooltips behind the text area: the caret is what matters
        there, and a tooltip would sit between the reader and their own text. */
-    .caption-highlights .review-word::after,
-    .caption-highlights .review-accepted::after {
+    .caption-highlights .review-word::after {
         content: none;
     }
 

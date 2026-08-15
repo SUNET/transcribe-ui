@@ -72,8 +72,6 @@ class RenderMixin:
                 .props("borderless autogrow")
             )
 
-            self.attach_word_clicks(backdrop)
-
             def repaint(event) -> None:
                 # The new value comes on the event itself. Reading it back off
                 # the element would race NiceGUI's own listener for the same
@@ -258,10 +256,8 @@ class RenderMixin:
                             )
 
                             if review_html:
-                                self.attach_word_clicks(
-                                    ui.html(review_html, sanitize=False).classes(
-                                        "text-sm leading-relaxed whitespace-pre-wrap"
-                                    )
+                                ui.html(review_html, sanitize=False).classes(
+                                    "text-sm leading-relaxed whitespace-pre-wrap"
                                 )
                             else:
                                 ui.label(caption.text).classes(
@@ -518,10 +514,8 @@ class RenderMixin:
                         )
 
                         if review_html:
-                            self.attach_word_clicks(
-                                ui.html(review_html, sanitize=False).classes(
-                                    "text-sm leading-relaxed whitespace-pre-wrap"
-                                )
+                            ui.html(review_html, sanitize=False).classes(
+                                "text-sm leading-relaxed whitespace-pre-wrap"
                             )
                         else:
                             ui.label(caption.text).classes(

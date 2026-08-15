@@ -96,9 +96,8 @@ class TestMarkedWordsAreLayoutNeutral:
     the reader is typing.
     """
 
-    @pytest.mark.parametrize("selector", [".review-word", ".review-accepted"])
-    def test_read_view_styling_is_neutralised(self, selector):
-        applied = effective(f".caption-highlights {selector}")
+    def test_read_view_styling_is_neutralised(self):
+        applied = effective(".caption-highlights .review-word")
 
         assert applied["color"] == "transparent"
         assert applied["padding"] == "0"
