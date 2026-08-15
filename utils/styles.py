@@ -800,6 +800,95 @@ theme_styles = """
         font-variant-numeric: tabular-nums;
     }
 
+    /* ── Caption editor with review highlighting ── */
+    /* A text area cannot render markup, so the highlights live on a layer
+       behind it. Every metric that decides where a character lands is stated
+       once here and applied to both layers -- inherit any of them and the
+       highlight boxes slide off their words. */
+    .caption-editor {
+        position: relative;
+        border: 1px solid var(--color-border-subtle);
+        border-radius: 4px;
+        background-color: var(--color-bg-surface);
+        overflow: hidden;
+    }
+    .caption-editor:focus-within {
+        border-color: var(--color-brand-primary);
+    }
+
+    .caption-editor .caption-highlights,
+    .caption-editor .caption-entry .q-field__native {
+        font-family: inherit;
+        font-size: 0.875rem;
+        line-height: 1.6;
+        letter-spacing: normal;
+        padding: 8px 10px;
+        margin: 0;
+        border: 0;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+        word-break: normal;
+    }
+
+    /* The layer holds the same text in a transparent colour, so only the
+       highlight boxes show through from underneath. */
+    .caption-highlights {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        color: transparent;
+        pointer-events: none;
+        overflow: hidden;
+    }
+    /* The read view gives a marked word its own colour and padding. Both have
+       to go here: the colour would draw the word a second time underneath the
+       one already in the text area, and the padding would widen it, pushing
+       every character after it out of step. Only background and inset shadow
+       are safe -- neither takes up space. The words stay clickable even
+       though the layer itself is not. */
+    .caption-highlights .review-word,
+    .caption-highlights .review-accepted {
+        pointer-events: auto;
+        color: transparent;
+        padding: 0;
+        border: 0;
+        box-shadow: none;
+        background-color: transparent;
+    }
+    .caption-highlights .review-word {
+        background-color: var(--color-review-bg);
+        box-shadow: inset 0 -2px 0 var(--color-review-accent);
+    }
+    .caption-highlights .review-accepted {
+        box-shadow: inset 0 -1px 0 var(--color-border-subtle);
+    }
+    /* No hover tooltips behind the text area: the caret is what matters
+       there, and a tooltip would sit between the reader and their own text. */
+    .caption-highlights .review-word::after,
+    .caption-highlights .review-accepted::after {
+        content: none;
+    }
+
+    /* The text area itself: transparent, so the layer shows through. */
+    .caption-editor .caption-entry {
+        position: relative;
+        z-index: 1;
+    }
+    .caption-editor .caption-entry .q-field__control,
+    .caption-editor .caption-entry .q-field__control::before,
+    .caption-editor .caption-entry .q-field__control::after {
+        padding: 0;
+        border: 0;
+        background: transparent;
+        min-height: 0;
+    }
+    .caption-editor .caption-entry .q-field__native {
+        background: transparent;
+        color: var(--color-text-primary);
+        min-height: 5rem;
+        resize: none;
+    }
+
     /* ── SRT editor info panel ── */
     .srt-info-panel {
         background-color: var(--color-bg-surface-alt);

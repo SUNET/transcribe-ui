@@ -504,9 +504,11 @@ class TestMarkingSurvivesEditing:
         )
 
         text = " ".join(["ja"] * 300)
-        scores = editor.aligned_word_scores(caption(text))
+        words = editor.aligned_words(caption(text))
 
-        assert all(score == 0.10 for score in scores), "alignment dropped words"
+        assert all(word and word["c"] == 0.10 for word in words), (
+            "alignment dropped words"
+        )
 
 
 class TestPersistedAutoscroll:
@@ -660,3 +662,86 @@ class TestMarkingWordsCorrect:
 
         editor.handle_word_click(Event(1))
         assert editor.accepted_words == {1}
+
+
+class TestReviewBackdrop:
+    """
+    The highlight layer painted behind an open caption text area.
+    """
+
+    def test_mirrors_the_text_exactly(self, editor):
+        """
+        The layer has to hold the same characters as the text area, or the
+        highlight boxes drift off their words.
+        """
+
+        editor.load_words(PAYLOAD)
+        editor.show_uncertain_words = True
+
+        html = editor.review_backdrop_html(caption(), TEXT)
+        stripped = re.sub(r"<[^>]+>", "", html)
+
+        assert stripped == TEXT
+
+    def test_marks_the_flagged_word(self, editor):
+        editor.load_words(PAYLOAD)
+        editor.show_uncertain_words = True
+
+        assert 'class="review-word"' in editor.review_backdrop_html(caption(), TEXT)
+
+    def test_returns_markup_even_with_nothing_flagged(self, editor):
+        """
+        get_review_html returns None when nothing is marked; the layer cannot,
+        or it would stop mirroring the text area.
+        """
+
+        editor.load_words(PAYLOAD)
+        editor.show_uncertain_words = True
+
+        assert editor.review_backdrop_html(caption(), "helt annan text") != ""
+        assert editor.get_review_html(caption(), "helt annan text") is None
+
+    def test_returns_markup_with_the_toggle_off(self, editor):
+        editor.load_words(PAYLOAD)
+        editor.show_uncertain_words = False
+
+        html = editor.review_backdrop_html(caption(), TEXT)
+
+        assert "review-word" not in html
+        assert re.sub(r"<[^>]+>", "", html) == TEXT
+
+    def test_tracks_uncommitted_text(self, editor):
+        """
+        Typing repaints the layer from the live value, before the caption has
+        been updated.
+        """
+
+        editor.load_words(PAYLOAD)
+        editor.show_uncertain_words = True
+        target = caption()
+
+        assert "review-word" in editor.review_backdrop_html(target, TEXT)
+        # Same caption object, but the word has been typed over.
+        assert "review-word" not in editor.review_backdrop_html(
+            target, "Hej TVÅ dig idag"
+        )
+
+    def test_escapes_the_text(self, editor):
+        editor.load_words(PAYLOAD)
+        editor.show_uncertain_words = True
+
+        html = editor.review_backdrop_html(caption(), "Hej <b>på</b> dig")
+
+        assert "<b>" not in html
+        assert "&lt;b&gt;" in html
+
+    def test_trailing_newline_keeps_a_line_box(self, editor):
+        """
+        A text area shows an empty last line for a trailing newline; without
+        this the layer is one line short and every box below shifts up.
+        """
+
+        editor.load_words(PAYLOAD)
+        editor.show_uncertain_words = True
+
+        assert editor.review_backdrop_html(caption(), "Hej\n").endswith("<br>")
