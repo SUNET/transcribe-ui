@@ -752,8 +752,11 @@ theme_styles = """
         content: attr(data-review);
         position: absolute;
         bottom: calc(100% + 6px);
-        left: 50%;
-        transform: translateX(-50%);
+        /* Anchored to the word's left edge rather than centred on it. Centred,
+           the tooltip reaches roughly half its width to the left of the word,
+           which puts it outside the scrolling caption list for any word at the
+           start of a line -- the first word of a caption came out half cut. */
+        left: 0;
         z-index: 9000;
         padding: 4px 8px;
         border-radius: 4px;
@@ -763,8 +766,12 @@ theme_styles = """
         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
         font-size: 12px;
         font-weight: 600;
-        line-height: 1;
-        white-space: nowrap;
+        line-height: 1.3;
+        /* Wraps rather than running off the right for a word near the end of
+           a line. The message fits on one line at this width in practice. */
+        max-width: 14rem;
+        width: max-content;
+        white-space: normal;
         text-decoration: none;
         pointer-events: none;
         opacity: 0;
