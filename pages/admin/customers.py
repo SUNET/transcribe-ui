@@ -28,6 +28,7 @@ from utils.common import page_init
 from utils.styles import default_styles
 from utils.helpers import (
     save_customer,
+    export_billing_data,
     export_customers_csv,
     customers_get,
 )
@@ -364,11 +365,36 @@ def customers() -> None:
                 )
                 create.on("click", lambda: create_customer_dialog(page=customers))
 
-            # Export CSV button
-            export_csv = (
-                ui.button("Export CSV").classes("button-edit").props("color=white flat")
-            )
-            export_csv.on("click", lambda: export_customers_csv())
+            if get_bofh_status():
+                # Billing covers every customer, so it is BOFH only. With two
+                # exports to choose from they go behind one menu rather than
+                # spreading buttons along the header.
+                with (
+                    ui.dropdown_button("Export", auto_close=True)
+                    .classes("button-edit")
+                    .props("color=white flat")
+                ):
+                    ui.item(
+                        "Customers (CSV)",
+                        on_click=lambda: export_customers_csv(),
+                    )
+                    with ui.item(
+                        "Billing (CSV)",
+                        on_click=lambda: export_billing_data(),
+                    ):
+                        ui.tooltip(
+                            "Base fee, blocks and overage minutes per "
+                            "customer, for the last full month"
+                        )
+            else:
+                # Realm admins see their own account information only, so the
+                # plain customer export is all there is to offer.
+                export_csv = (
+                    ui.button("Export CSV")
+                    .classes("button-edit")
+                    .props("color=white flat")
+                )
+                export_csv.on("click", lambda: export_customers_csv())
 
     customers_data = customers_get()
 

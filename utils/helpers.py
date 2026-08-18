@@ -16,11 +16,11 @@
 # limitations under the License.
 
 import re
+from datetime import date
+from typing import Optional
 
 import httpx
-
 from nicegui import app, ui
-from typing import Optional
 from utils.crypto import decrypt_string, encrypt_string, get_browser_id
 from utils.settings import get_settings
 from utils.token import get_auth_header
@@ -186,6 +186,69 @@ def export_customers_csv() -> None:
 
     except httpx.HTTPError:
         ui.notify("Error when exporting customers", color="red")
+
+
+# Minutes of transcription one purchased block covers. Anything beyond the
+# blocks a customer bought is billed as overage. Must match the figure used by
+# scripts/customer_billing.py in transcribe-backend, which produces the same
+# report from the command line.
+MINUTES_PER_BLOCK = 4000
+
+# Header of the billing report, in Swedish: customer, base fee, blocks,
+# overage minutes.
+BILLING_HEADER = "Kund;Grund;Block;Minuter"
+
+
+def format_billing_data(customers: list, report_date: str) -> str:
+    """
+    Build the per-customer billing report.
+
+    Semicolon separated, the convention for CSV in a Swedish locale, and byte
+    for byte what scripts/customer_billing.py prints so that the two can be
+    used interchangeably.
+    """
+
+    lines = [f"DATE:{report_date}", BILLING_HEADER]
+
+    for customer in sorted(customers, key=lambda c: c.get("customer_abbr") or ""):
+        abbr = customer.get("customer_abbr") or ""
+        base_fee = customer.get("base_fee", 0) or 0
+        blocks_purchased = customer.get("blocks_purchased", 0) or 0
+        stats = customer.get("stats") or {}
+
+        total_minutes = stats.get("total_transcribed_minutes_last_month", 0) or 0
+        overage_minutes = max(0, total_minutes - blocks_purchased * MINUTES_PER_BLOCK)
+
+        lines.append(f"{abbr};{base_fee};{blocks_purchased};{overage_minutes}")
+
+    return "\n".join(lines) + "\n"
+
+
+def export_billing_data() -> None:
+    """
+    Export the billing report for all customers.
+    """
+
+    report_date = date.today().isoformat()
+
+    try:
+        res = httpx.get(
+            settings.API_URL + "/api/v1/admin/customers",
+            headers=get_auth_header(),
+        )
+        res.raise_for_status()
+        customers = res.json().get("result", [])
+    except httpx.HTTPError:
+        ui.notify("Error when exporting billing data", color="red")
+        return
+    except ValueError:
+        ui.notify("Unexpected response when exporting billing data", color="red")
+        return
+
+    ui.download.content(
+        format_billing_data(customers, report_date),
+        filename=f"billing_{report_date}.csv",
+    )
 
 
 def save_customer(
@@ -603,6 +666,7 @@ def set_admin_status(
                 type="negative",
             )
 
+
 def set_user_admin_and_domains(username: str, admin: bool, admin_domains: str) -> None:
     """
     Set admin status and admin domains in one request.
@@ -616,6 +680,7 @@ def set_user_admin_and_domains(username: str, admin: bool, admin_domains: str) -
         },
     )
     res.raise_for_status()
+
 
 def open_make_admin_dialog(selected_rows: list, all_users: list) -> None:
     """
@@ -636,9 +701,9 @@ def open_make_admin_dialog(selected_rows: list, all_users: list) -> None:
     with ui.dialog() as admin_dialog:
         with ui.card().style("width: 500px; max-width: 90vw;"):
             if len(selected_rows) == 1:
-                ui.label(
-                    f"Make {selected_rows[0]['username']} admin"
-                ).classes("text-2xl font-bold")
+                ui.label(f"Make {selected_rows[0]['username']} admin").classes(
+                    "text-2xl font-bold"
+                )
             else:
                 ui.label("Make users admin").classes("text-2xl font-bold")
 
@@ -688,11 +753,12 @@ def open_make_admin_dialog(selected_rows: list, all_users: list) -> None:
                     "color=black flat"
                 ).on("click", lambda: admin_dialog.close())
 
-                ui.button("Save").classes("default-style").props(
-                    "color=black flat"
-                ).on("click", on_save)
+                ui.button("Save").classes("default-style").props("color=black flat").on(
+                    "click", on_save
+                )
 
         admin_dialog.open()
+
 
 def reset_manual_override(selected_rows: list) -> None:
     """
